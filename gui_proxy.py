@@ -13,14 +13,12 @@ import configparser
 import csv
 from pathlib import Path
 
-
 class ProxyApp:
     def __init__(self, root):
         self.root = root
         self.root.title("HTTPS Прокси")
-        self.root.geometry("700x550")
+        self.root.geometry("750x600") # Увеличил ширину для новой статистики
         self.root.resizable(True, True)
-        
         # Инициализация переменных
         self.server_task = None
         self.loop = None
@@ -32,36 +30,32 @@ class ProxyApp:
         self.BLOCKED = set()
         self.tray_icon = None
         self.server = None  # Добавлено для хранения объекта сервера
-        
         # Статистика трафика
         self.upload_bytes = 0
         self.download_bytes = 0
+        self.session_upload_bytes = 0 # Новая переменная для статистики сессии
+        self.session_download_bytes = 0 # Новая переменная для статистики сессии
         self.last_update_time = 0
         self.last_hour_stats = {'upload': 0, 'download': 0}
         self.stats_file = "traffic_stats.csv"
-        
+        # Для отслеживания последнего сохраненного часа
+        self.last_saved_hour = None
         # Настройки по умолчанию
         self.default_url = "https://github.com/andreiwsa/pacbl/releases/download/v09082025/youtube-domain.txt"
         self.config_file = "proxy_config.ini"
-        
         # Загрузка конфигурации
         self.config = configparser.ConfigParser()
-        
         # Сначала создаем переменные GUI
         self.auto_start = tk.BooleanVar()
         self.minimize_to_tray = tk.BooleanVar()
         self.last_url = tk.StringVar()
-        
         # Затем загружаем конфигурацию
         self.load_config()
-        
         # Создание GUI
         self.create_gui()
-        
         # Запуск сервера если нужно
         if self.auto_start.get():
             self.load_blocked_domains_and_start()
-        
         # Запуск таймера для сохранения статистики
         self.start_stats_timer()
 
@@ -69,16 +63,13 @@ class ProxyApp:
         """Сохраняет конфигурацию в файл"""
         if not self.config.has_section('Settings'):
             self.config.add_section('Settings')
-        
         # Обновляем переданные параметры
         for key, value in kwargs.items():
             self.config.set('Settings', key, str(value))
-        
         # Сохраняем текущие значения из GUI
         self.config.set('Settings', 'auto_start', str(self.auto_start.get()))
         self.config.set('Settings', 'minimize_to_tray', str(self.minimize_to_tray.get()))
         self.config.set('Settings', 'last_url', self.last_url.get())
-        
         try:
             with open(self.config_file, 'w') as configfile:
                 self.config.write(configfile)
@@ -93,20 +84,17 @@ class ProxyApp:
             'minimize_to_tray': 'True',
             'last_url': self.default_url
         }
-        
         # Если файл существует - загружаем его
         if os.path.exists(self.config_file):
             try:
                 self.config.read(self.config_file)
             except Exception as e:
                 self.log_message(f"Ошибка чтения конфига: {e}. Используются значения по умолчанию")
-        
         # Устанавливаем значения для переменных GUI
         try:
             auto_start_val = self.config.getboolean('Settings', 'auto_start', fallback=False)
             minimize_val = self.config.getboolean('Settings', 'minimize_to_tray', fallback=True)
             last_url_val = self.config.get('Settings', 'last_url', fallback=self.default_url)
-            
             self.auto_start.set(auto_start_val)
             self.minimize_to_tray.set(minimize_val)
             self.last_url.set(last_url_val)
@@ -115,7 +103,6 @@ class ProxyApp:
             self.auto_start.set(False)
             self.minimize_to_tray.set(True)
             self.last_url.set(self.default_url)
-        
         # Сохраняем конфиг (создаем файл если его не было)
         self.save_config()
 
@@ -123,13 +110,10 @@ class ProxyApp:
         # URL строка
         url_frame = tk.Frame(self.root)
         url_frame.pack(pady=5, fill=tk.X, padx=10)
-
         tk.Label(url_frame, text="URL списка доменов:").pack(side=tk.LEFT)
-
         self.url_entry = tk.Entry(url_frame, textvariable=self.last_url)
         self.url_entry.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=5)
         self.setup_entry_bindings(self.url_entry)
-
         self.load_btn = tk.Button(url_frame, text="Загрузить", command=self.load_blocked_domains_and_start)
         self.load_btn.pack(side=tk.LEFT)
 
@@ -145,22 +129,33 @@ class ProxyApp:
         # Настройки
         settings_frame = tk.Frame(self.root)
         settings_frame.pack(pady=5, fill=tk.X, padx=10)
-        
-        tk.Checkbutton(settings_frame, text="Автостарт прокси", variable=self.auto_start, 
+        tk.Checkbutton(settings_frame, text="Автостарт прокси", variable=self.auto_start,
                       command=lambda: self.save_config(auto_start=self.auto_start.get())).pack(side=tk.LEFT, padx=5)
         tk.Checkbutton(settings_frame, text="Сворачивать в трей", variable=self.minimize_to_tray,
                       command=lambda: self.save_config(minimize_to_tray=self.minimize_to_tray.get())).pack(side=tk.LEFT, padx=5)
 
-        # Статистика трафика
+        # Статистика трафика - Обновлено
         traffic_frame = tk.Frame(self.root)
         traffic_frame.pack(pady=5, fill=tk.X, padx=10)
-        
-        self.upload_label = tk.Label(traffic_frame, text="Отправлено: 0 Б")
-        self.upload_label.pack(side=tk.LEFT, padx=5)
-        
-        self.download_label = tk.Label(traffic_frame, text="Получено: 0 Б")
-        self.download_label.pack(side=tk.LEFT, padx=5)
-        
+
+        # Статистика за последний час
+        hour_frame = tk.Frame(traffic_frame)
+        hour_frame.pack(side=tk.TOP, fill=tk.X)
+        tk.Label(hour_frame, text="За последний час:").pack(side=tk.LEFT)
+        self.hour_upload_label = tk.Label(hour_frame, text="Отправлено: 0 Б")
+        self.hour_upload_label.pack(side=tk.LEFT, padx=5)
+        self.hour_download_label = tk.Label(hour_frame, text="Получено: 0 Б")
+        self.hour_download_label.pack(side=tk.LEFT, padx=5)
+
+        # Статистика за сессию
+        session_frame = tk.Frame(traffic_frame)
+        session_frame.pack(side=tk.TOP, fill=tk.X)
+        tk.Label(session_frame, text="За сессию:").pack(side=tk.LEFT)
+        self.session_upload_label = tk.Label(session_frame, text="Отправлено: 0 Б")
+        self.session_upload_label.pack(side=tk.LEFT, padx=5)
+        self.session_download_label = tk.Label(session_frame, text="Получено: 0 Б")
+        self.session_download_label.pack(side=tk.LEFT, padx=5)
+
         self.reset_traffic_btn = tk.Button(traffic_frame, text="Сбросить", command=self.reset_traffic_stats)
         self.reset_traffic_btn.pack(side=tk.RIGHT, padx=5)
 
@@ -189,16 +184,22 @@ class ProxyApp:
 
         # Обработка сворачивания в трей
         self.root.protocol("WM_DELETE_WINDOW", self.minimize_window)
-        
         self.log_message("Готов к работе. Нажмите 'Загрузить', чтобы получить список доменов.")
 
     def start_stats_timer(self):
         """Запускает таймер для ежечасного сохранения статистики"""
-        def save_hourly_stats():
-            self.save_traffic_stats()
-            self.root.after(3600000, save_hourly_stats)  # 1 час = 3600000 мс
+        def check_and_save_stats():
+            now = datetime.datetime.now()
+            current_hour = now.replace(minute=0, second=0, microsecond=0)
             
-        self.root.after(3600000, save_hourly_stats)
+            # Проверяем, прошел ли час с момента последнего сохранения
+            if self.last_saved_hour is None or current_hour > self.last_saved_hour:
+                self.save_traffic_stats()
+                self.last_saved_hour = current_hour
+            
+            self.root.after(60000, check_and_save_stats) # Проверяем каждую минуту
+
+        self.root.after(60000, check_and_save_stats) # Запуск через 1 минуту
 
     def save_traffic_stats(self):
         """Сохраняет статистику трафика за последний час в CSV"""
@@ -206,23 +207,26 @@ class ProxyApp:
             upload_diff = self.upload_bytes - self.last_hour_stats['upload']
             download_diff = self.download_bytes - self.last_hour_stats['download']
             
+            # Не сохраняем, если нет трафика
             if upload_diff == 0 and download_diff == 0:
                 return
                 
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            file_exists = os.path.exists(self.stats_file)
+            # Используем текущий час для метки времени
+            now = datetime.datetime.now()
+            hour_start = now.replace(minute=0, second=0, microsecond=0)
+            timestamp = hour_start.strftime("%Y-%m-%d %H:%M:%S")
             
+            file_exists = os.path.exists(self.stats_file)
             with open(self.stats_file, 'a', newline='') as csvfile:
                 writer = csv.writer(csvfile)
                 if not file_exists:
                     writer.writerow(['Timestamp', 'Upload (bytes)', 'Download (bytes)'])
                 writer.writerow([timestamp, upload_diff, download_diff])
-            
+                
             self.last_hour_stats = {
                 'upload': self.upload_bytes,
                 'download': self.download_bytes
             }
-            
             self.log_message(f"Статистика за час сохранена: отправлено {upload_diff} Б, получено {download_diff} Б")
         except Exception as e:
             self.log_message(f"Ошибка сохранения статистики: {e}")
@@ -265,14 +269,24 @@ class ProxyApp:
                     return f"{size:.2f} {unit}"
                 size /= 1024
             return f"{size:.2f} ТБ"
+
+        # Статистика за последний час
+        hour_upload = self.upload_bytes - self.last_hour_stats['upload']
+        hour_download = self.download_bytes - self.last_hour_stats['download']
         
-        self.upload_label.config(text=f"Отправлено: {format_bytes(self.upload_bytes)}")
-        self.download_label.config(text=f"Получено: {format_bytes(self.download_bytes)}")
+        self.hour_upload_label.config(text=f"Отправлено: {format_bytes(hour_upload)}")
+        self.hour_download_label.config(text=f"Получено: {format_bytes(hour_download)}")
+        
+        # Статистика за сессию
+        self.session_upload_label.config(text=f"Отправлено: {format_bytes(self.session_upload_bytes)}")
+        self.session_download_label.config(text=f"Получено: {format_bytes(self.session_download_bytes)}")
 
     def reset_traffic_stats(self):
         """Сбрасывает статистику трафика"""
         self.upload_bytes = 0
         self.download_bytes = 0
+        self.session_upload_bytes = 0
+        self.session_download_bytes = 0
         self.last_hour_stats = {'upload': 0, 'download': 0}
         self.update_traffic_stats()
         self.log_message("Статистика трафика сброшена")
@@ -285,18 +299,14 @@ class ProxyApp:
             self.log_text.insert(tk.END, full_message)
             self.log_text.config(state='disabled')
             self.log_text.see(tk.END)
-
             self.log_size += len(full_message.encode('utf-8'))
-
             if self.log_size >= self.max_log_size:
                 self.save_log_to_file()
-
             # Ограничение отображаемого лога
             if len(self.log_text.get("1.0", tk.END)) * 2 > 2 * 1024 * 1024:
                 self.log_text.config(state='normal')
-                self.log_text.delete("1.0", "end-1c\n")
+                self.log_text.delete("1.0", "end-1c lineend")
                 self.log_text.config(state='disabled')
-
         self.root.after(0, append)
 
     def save_log_to_file(self):
@@ -346,9 +356,7 @@ class ProxyApp:
         if not self.last_url.get().strip():
             self.log_message("URL не указан.")
             return
-
         self.load_btn.config(state=tk.DISABLED)
-
         async def async_load():
             try:
                 self.log_message("Загрузка доменов с URL...")
@@ -361,7 +369,6 @@ class ProxyApp:
                 self.log_message(f"Ошибка загрузки: {str(e)}")
             finally:
                 self.root.after(0, lambda: self.load_btn.config(state=tk.NORMAL))
-
         threading.Thread(target=lambda: asyncio.run(async_load()), daemon=True).start()
 
     def get_asyncio_loop(self):
@@ -382,19 +389,18 @@ class ProxyApp:
                     break
                 writer.write(data)
                 await writer.drain()
-                
                 # Обновляем статистику трафика
                 if is_upload:
                     self.upload_bytes += len(data)
+                    self.session_upload_bytes += len(data)
                 else:
                     self.download_bytes += len(data)
-                
+                    self.session_download_bytes += len(data)
                 # Обновляем GUI (не чаще чем раз в 0.5 секунды)
                 current_time = asyncio.get_event_loop().time()
                 if current_time - self.last_update_time > 0.5:
                     self.last_update_time = current_time
                     self.root.after(0, self.update_traffic_stats)
-                    
         except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError):
             pass
         except Exception as e:
@@ -415,7 +421,6 @@ class ProxyApp:
                 remote_writer.write(head + data)
                 await remote_writer.drain()
                 return
-
             self.log_message("Фрагментация данных...")
             while data:
                 part_len = random.randint(1, len(data))
@@ -434,21 +439,17 @@ class ProxyApp:
         addr = local_writer.get_extra_info('peername')
         conn_id = f"{addr[0]}:{addr[1]}"
         self.log_message(f"Подключение: {conn_id}")
-
         try:
             http_data = await asyncio.wait_for(local_reader.read(1500), timeout=10.0)
             if not http_data:
                 return
-
             first_line = http_data.split(b"\r\n")[0]
             parts = first_line.split(b" ")
             if len(parts) < 3:
                 return
             method, target, *_ = parts
-
             if method != b"CONNECT":
                 return
-
             try:
                 host_port = target.split(b":")
                 if len(host_port) != 2:
@@ -459,27 +460,21 @@ class ProxyApp:
             except Exception as e:
                 self.log_message(f"Некорректный CONNECT: {target} — {e}")
                 return
-
             self.log_message(f"Проксируем: {host_str}:{port}")
-
             local_writer.write(b'HTTP/1.1 200 OK\r\n\r\n')
             await local_writer.drain()
-
             try:
                 remote_reader, remote_writer = await asyncio.open_connection(host_str, port)
                 self.active_connections.append((remote_reader, remote_writer))
             except Exception as e:
                 self.log_message(f"Ошибка подключения к {host_str}:{port}: {e}")
                 return
-
             try:
                 if port == 443:
                     await self.fragment_data(local_reader, remote_writer)
-
                 task1 = asyncio.create_task(self.pipe(local_reader, remote_writer, is_upload=True))
                 task2 = asyncio.create_task(self.pipe(remote_reader, local_writer, is_upload=False))
                 self.tasks.extend([task1, task2])
-
                 await asyncio.gather(task1, task2)
             except Exception as e:
                 self.log_message(f"[CONNECTION] Ошибка передачи: {e}")
@@ -501,8 +496,8 @@ class ProxyApp:
         server = None
         try:
             server = await asyncio.start_server(
-                self.handle_connection, 
-                '127.0.0.1', 
+                self.handle_connection,
+                '127.0.0.1',
                 8881,
                 reuse_address=True  # Ключевое исправление
             )
@@ -528,11 +523,15 @@ class ProxyApp:
             if self.server_task and not self.server_task.done():
                 self.log_message("Сервер еще останавливается, подождите...")
                 return
-
             self.running = True
             self.update_indicator(True)
             self.start_btn.config(state=tk.DISABLED)
             self.stop_btn.config(state=tk.NORMAL)
+            # Сбрасываем статистику сессии при запуске
+            self.session_upload_bytes = 0
+            self.session_download_bytes = 0
+            # Обновляем время последнего сохраненного часа
+            self.last_saved_hour = datetime.datetime.now().replace(minute=0, second=0, microsecond=0)
             threading.Thread(target=self.run_asyncio, daemon=True).start()
 
     def run_asyncio(self):
@@ -558,38 +557,31 @@ class ProxyApp:
             self.update_indicator(False)
             self.start_btn.config(state=tk.NORMAL)
             self.stop_btn.config(state=tk.DISABLED)
-
             # Сохраняем ссылки перед отменой
             server = self.server
             server_task = self.server_task
-
             # Отменяем серверную задачу
             if server_task and not server_task.done():
                 server_task.cancel()
-
             # Закрываем сервер асинхронно
             if server:
                 async def close_server():
                     server.close()
                     await server.wait_closed()
-                
                 try:
                     asyncio.run_coroutine_threadsafe(close_server(), self.loop)
                 except RuntimeError:
                     pass  # Цикл уже остановлен
-
             # Отменяем все задачи передачи данных
             for task in self.tasks:
                 if not task.done():
                     task.cancel()
             self.tasks.clear()
-
             # Закрываем все активные соединения
             for reader, writer in self.active_connections:
                 if not writer.is_closing():
                     writer.close()
             self.active_connections.clear()
-
             self.log_message("Сервер и все соединения остановлены.")
 
     def update_indicator(self, status):
@@ -600,19 +592,15 @@ class ProxyApp:
     def create_tray_icon(self):
         if self.tray_icon is not None:
             return
-            
         # Создаем временное изображение для иконки
         image = Image.new('RGB', (64, 64), color='green' if self.running else 'gray')
-        
         menu = (
             pystray.MenuItem('Показать', self.restore_window),
             pystray.MenuItem('Включить прокси', self.start_server, enabled=not self.running),
             pystray.MenuItem('Выключить прокси', self.stop_server, enabled=self.running),
             pystray.MenuItem('Выход', self.quit_application)
         )
-        
         self.tray_icon = pystray.Icon("proxy_icon", image, "HTTPS Прокси", menu)
-        
         # Запускаем иконку в отдельном потоке
         threading.Thread(target=self.tray_icon.run, daemon=True).start()
 
@@ -644,7 +632,6 @@ class ProxyApp:
                 self.quit_application()
         else:
             self.quit_application()
-
 
 if __name__ == "__main__":
     root = tk.Tk()
