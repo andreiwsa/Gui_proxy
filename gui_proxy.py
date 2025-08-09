@@ -9,6 +9,9 @@ import pystray
 from PIL import Image
 import sys
 import os
+import configparser
+import csv
+from pathlib import Path
 
 
 class ProxyApp:
@@ -17,39 +20,117 @@ class ProxyApp:
         self.root.title("HTTPS Прокси")
         self.root.geometry("700x550")
         self.root.resizable(True, True)
+        
+        # Инициализация переменных
         self.server_task = None
         self.loop = None
         self.running = False
         self.tasks = []
-        self.active_connections = []  # Активные (reader, writer)
+        self.active_connections = []
         self.log_size = 0
         self.max_log_size = 1024 * 1024  # 1 МБ
-        self.BLOCKED = set()  # Используем set для быстрого поиска
+        self.BLOCKED = set()
         self.tray_icon = None
-        self.auto_start = tk.BooleanVar(value=True)  # Автостарт по умолчанию
-        self.minimize_to_tray = tk.BooleanVar(value=True)  # Сворачивать в трей по умолчанию
-        self.upload_bytes = 0  # Счетчик отправленных байт
-        self.download_bytes = 0  # Счетчик полученных байт
-        self.last_update_time = 0  # Время последнего обновления статистики
-
-        # === URL для загрузки доменов ===
+        self.server = None  # Добавлено для хранения объекта сервера
+        
+        # Статистика трафика
+        self.upload_bytes = 0
+        self.download_bytes = 0
+        self.last_update_time = 0
+        self.last_hour_stats = {'upload': 0, 'download': 0}
+        self.stats_file = "traffic_stats.csv"
+        
+        # Настройки по умолчанию
         self.default_url = "https://github.com/andreiwsa/pacbl/releases/download/v09082025/youtube-domain.txt"
+        self.config_file = "proxy_config.ini"
+        
+        # Загрузка конфигурации
+        self.config = configparser.ConfigParser()
+        
+        # Сначала создаем переменные GUI
+        self.auto_start = tk.BooleanVar()
+        self.minimize_to_tray = tk.BooleanVar()
+        self.last_url = tk.StringVar()
+        
+        # Затем загружаем конфигурацию
+        self.load_config()
+        
+        # Создание GUI
+        self.create_gui()
+        
+        # Запуск сервера если нужно
+        if self.auto_start.get():
+            self.load_blocked_domains_and_start()
+        
+        # Запуск таймера для сохранения статистики
+        self.start_stats_timer()
 
-        # === GUI элементы ===
+    def save_config(self, **kwargs):
+        """Сохраняет конфигурацию в файл"""
+        if not self.config.has_section('Settings'):
+            self.config.add_section('Settings')
+        
+        # Обновляем переданные параметры
+        for key, value in kwargs.items():
+            self.config.set('Settings', key, str(value))
+        
+        # Сохраняем текущие значения из GUI
+        self.config.set('Settings', 'auto_start', str(self.auto_start.get()))
+        self.config.set('Settings', 'minimize_to_tray', str(self.minimize_to_tray.get()))
+        self.config.set('Settings', 'last_url', self.last_url.get())
+        
+        try:
+            with open(self.config_file, 'w') as configfile:
+                self.config.write(configfile)
+        except Exception as e:
+            self.log_message(f"Ошибка сохранения конфига: {e}")
+
+    def load_config(self):
+        """Загружает конфигурацию из файла или создает новую"""
+        # Создаем конфиг с настройками по умолчанию
+        default_config = {
+            'auto_start': 'False',
+            'minimize_to_tray': 'True',
+            'last_url': self.default_url
+        }
+        
+        # Если файл существует - загружаем его
+        if os.path.exists(self.config_file):
+            try:
+                self.config.read(self.config_file)
+            except Exception as e:
+                self.log_message(f"Ошибка чтения конфига: {e}. Используются значения по умолчанию")
+        
+        # Устанавливаем значения для переменных GUI
+        try:
+            auto_start_val = self.config.getboolean('Settings', 'auto_start', fallback=False)
+            minimize_val = self.config.getboolean('Settings', 'minimize_to_tray', fallback=True)
+            last_url_val = self.config.get('Settings', 'last_url', fallback=self.default_url)
+            
+            self.auto_start.set(auto_start_val)
+            self.minimize_to_tray.set(minimize_val)
+            self.last_url.set(last_url_val)
+        except Exception as e:
+            self.log_message(f"Ошибка обработки конфига: {e}. Используются значения по умолчанию")
+            self.auto_start.set(False)
+            self.minimize_to_tray.set(True)
+            self.last_url.set(self.default_url)
+        
+        # Сохраняем конфиг (создаем файл если его не было)
+        self.save_config()
+
+    def create_gui(self):
         # URL строка
         url_frame = tk.Frame(self.root)
         url_frame.pack(pady=5, fill=tk.X, padx=10)
 
         tk.Label(url_frame, text="URL списка доменов:").pack(side=tk.LEFT)
 
-        self.url_entry = tk.Entry(url_frame)
+        self.url_entry = tk.Entry(url_frame, textvariable=self.last_url)
         self.url_entry.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=5)
-        self.url_entry.insert(0, self.default_url)
-
-        # 🔧 Добавляем стандартные сочетания клавиш для Entry
         self.setup_entry_bindings(self.url_entry)
 
-        self.load_btn = tk.Button(url_frame, text="Загрузить", command=self.load_blocked_domains)
+        self.load_btn = tk.Button(url_frame, text="Загрузить", command=self.load_blocked_domains_and_start)
         self.load_btn.pack(side=tk.LEFT)
 
         # Поле для добавления своих доменов
@@ -65,8 +146,10 @@ class ProxyApp:
         settings_frame = tk.Frame(self.root)
         settings_frame.pack(pady=5, fill=tk.X, padx=10)
         
-        tk.Checkbutton(settings_frame, text="Автостарт прокси", variable=self.auto_start).pack(side=tk.LEFT, padx=5)
-        tk.Checkbutton(settings_frame, text="Сворачивать в трей", variable=self.minimize_to_tray).pack(side=tk.LEFT, padx=5)
+        tk.Checkbutton(settings_frame, text="Автостарт прокси", variable=self.auto_start, 
+                      command=lambda: self.save_config(auto_start=self.auto_start.get())).pack(side=tk.LEFT, padx=5)
+        tk.Checkbutton(settings_frame, text="Сворачивать в трей", variable=self.minimize_to_tray,
+                      command=lambda: self.save_config(minimize_to_tray=self.minimize_to_tray.get())).pack(side=tk.LEFT, padx=5)
 
         # Статистика трафика
         traffic_frame = tk.Frame(self.root)
@@ -104,15 +187,45 @@ class ProxyApp:
         self.log_text = scrolledtext.ScrolledText(self.root, wrap=tk.WORD, height=15, state='disabled')
         self.log_text.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
 
-        # Инициализация
-        self.log_message("Готов к работе. Нажмите 'Загрузить', чтобы получить список доменов.")
-        
         # Обработка сворачивания в трей
         self.root.protocol("WM_DELETE_WINDOW", self.minimize_window)
         
-        # Автозапуск прокси
-        if self.auto_start.get():
-            self.start_server()
+        self.log_message("Готов к работе. Нажмите 'Загрузить', чтобы получить список доменов.")
+
+    def start_stats_timer(self):
+        """Запускает таймер для ежечасного сохранения статистики"""
+        def save_hourly_stats():
+            self.save_traffic_stats()
+            self.root.after(3600000, save_hourly_stats)  # 1 час = 3600000 мс
+            
+        self.root.after(3600000, save_hourly_stats)
+
+    def save_traffic_stats(self):
+        """Сохраняет статистику трафика за последний час в CSV"""
+        try:
+            upload_diff = self.upload_bytes - self.last_hour_stats['upload']
+            download_diff = self.download_bytes - self.last_hour_stats['download']
+            
+            if upload_diff == 0 and download_diff == 0:
+                return
+                
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            file_exists = os.path.exists(self.stats_file)
+            
+            with open(self.stats_file, 'a', newline='') as csvfile:
+                writer = csv.writer(csvfile)
+                if not file_exists:
+                    writer.writerow(['Timestamp', 'Upload (bytes)', 'Download (bytes)'])
+                writer.writerow([timestamp, upload_diff, download_diff])
+            
+            self.last_hour_stats = {
+                'upload': self.upload_bytes,
+                'download': self.download_bytes
+            }
+            
+            self.log_message(f"Статистика за час сохранена: отправлено {upload_diff} Б, получено {download_diff} Б")
+        except Exception as e:
+            self.log_message(f"Ошибка сохранения статистики: {e}")
 
     def setup_entry_bindings(self, entry):
         """Добавляет стандартные сочетания клавиш для Entry: Ctrl+C, Ctrl+V, Ctrl+X, Ctrl+A"""
@@ -160,6 +273,7 @@ class ProxyApp:
         """Сбрасывает статистику трафика"""
         self.upload_bytes = 0
         self.download_bytes = 0
+        self.last_hour_stats = {'upload': 0, 'download': 0}
         self.update_traffic_stats()
         self.log_message("Статистика трафика сброшена")
 
@@ -227,35 +341,28 @@ class ProxyApp:
                 self.log_message(f"Ошибка загрузки с URL: {e}")
                 return set()
 
-    def load_blocked_domains(self):
-        url = self.url_entry.get().strip()
-        if not url:
+    def load_blocked_domains_and_start(self):
+        """Загружает домены и запускает сервер"""
+        if not self.last_url.get().strip():
             self.log_message("URL не указан.")
             return
 
-        # Блокируем кнопку на время загрузки
         self.load_btn.config(state=tk.DISABLED)
 
         async def async_load():
             try:
                 self.log_message("Загрузка доменов с URL...")
-                domains = await self.fetch_domains(url)
+                domains = await self.fetch_domains(self.last_url.get())
                 self.BLOCKED = domains
-                self.log_message(f"✅ Загружено {len(self.BLOCKED)} доменов с {url}")
+                self.log_message(f"✅ Загружено {len(self.BLOCKED)} доменов")
+                self.save_config(last_url=self.last_url.get())
+                self.start_server()
             except Exception as e:
                 self.log_message(f"Ошибка загрузки: {str(e)}")
             finally:
-                # Разблокируем кнопку
                 self.root.after(0, lambda: self.load_btn.config(state=tk.NORMAL))
 
-        # Запускаем асинхронную задачу в отдельном потоке
-        def run_async():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(async_load())
-            loop.close()
-
-        threading.Thread(target=run_async, daemon=True).start()
+        threading.Thread(target=lambda: asyncio.run(async_load()), daemon=True).start()
 
     def get_asyncio_loop(self):
         try:
@@ -267,7 +374,6 @@ class ProxyApp:
             asyncio.set_event_loop(self.loop)
         return self.loop
 
-    # === Основная логика сервера ===
     async def pipe(self, reader, writer, is_upload):
         try:
             while not reader.at_eof():
@@ -285,7 +391,7 @@ class ProxyApp:
                 
                 # Обновляем GUI (не чаще чем раз в 0.5 секунды)
                 current_time = asyncio.get_event_loop().time()
-                if current_time - self.last_update_time > 0.5:  # Обновляем раз в 0.5 секунды
+                if current_time - self.last_update_time > 0.5:
                     self.last_update_time = current_time
                     self.root.after(0, self.update_traffic_stats)
                     
@@ -394,22 +500,35 @@ class ProxyApp:
     async def run_server(self):
         server = None
         try:
-            server = await asyncio.start_server(self.handle_connection, '127.0.0.1', 8881)
+            server = await asyncio.start_server(
+                self.handle_connection, 
+                '127.0.0.1', 
+                8881,
+                reuse_address=True  # Ключевое исправление
+            )
+            self.server = server  # Сохраняем объект сервера
             self.log_message("Сервер запущен на 127.0.0.1:8881")
             async with server:
                 await server.serve_forever()
+        except asyncio.CancelledError:
+            self.log_message("Серверная задача отменена")
+            if server:
+                server.close()
+                await server.wait_closed()
         except OSError as e:
             self.log_message(f"[SERVER] Ошибка привязки: {e}")
         except Exception as e:
             self.log_message(f"[SERVER] Ошибка: {e}")
         finally:
-            if server:
-                server.close()
-                await server.wait_closed()
+            self.server = None
 
-    # === Управление сервером ===
     def start_server(self):
         if not self.running:
+            # Проверяем, есть ли незавершенная задача сервера
+            if self.server_task and not self.server_task.done():
+                self.log_message("Сервер еще останавливается, подождите...")
+                return
+
             self.running = True
             self.update_indicator(True)
             self.start_btn.config(state=tk.DISABLED)
@@ -419,15 +538,19 @@ class ProxyApp:
     def run_asyncio(self):
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
+        self.server = None  # Сбрасываем перед созданием нового
         try:
-            self.loop.run_until_complete(self.run_server())
+            self.server_task = self.loop.create_task(self.run_server())
+            self.loop.run_until_complete(self.server_task)
         except (asyncio.CancelledError, RuntimeError):
             self.log_message("Сервер остановлен.")
         except Exception as e:
             self.log_message(f"Ошибка цикла: {e}")
         finally:
-            self.loop.close()
+            if self.loop:
+                self.loop.close()
             self.loop = None
+            self.server_task = None
 
     def stop_server(self):
         if self.running:
@@ -436,25 +559,44 @@ class ProxyApp:
             self.start_btn.config(state=tk.NORMAL)
             self.stop_btn.config(state=tk.DISABLED)
 
-            if self.loop and self.loop.is_running():
-                for task in self.tasks:
+            # Сохраняем ссылки перед отменой
+            server = self.server
+            server_task = self.server_task
+
+            # Отменяем серверную задачу
+            if server_task and not server_task.done():
+                server_task.cancel()
+
+            # Закрываем сервер асинхронно
+            if server:
+                async def close_server():
+                    server.close()
+                    await server.wait_closed()
+                
+                try:
+                    asyncio.run_coroutine_threadsafe(close_server(), self.loop)
+                except RuntimeError:
+                    pass  # Цикл уже остановлен
+
+            # Отменяем все задачи передачи данных
+            for task in self.tasks:
+                if not task.done():
                     task.cancel()
-                self.tasks.clear()
+            self.tasks.clear()
 
-                for reader, writer in self.active_connections:
-                    if not writer.is_closing():
-                        writer.close()
-                self.active_connections.clear()
+            # Закрываем все активные соединения
+            for reader, writer in self.active_connections:
+                if not writer.is_closing():
+                    writer.close()
+            self.active_connections.clear()
 
-                self.loop.call_soon_threadsafe(self.loop.stop)
-                self.log_message("Сервер и все соединения остановлены.")
+            self.log_message("Сервер и все соединения остановлены.")
 
     def update_indicator(self, status):
         color = "green" if status else "gray"
         self.indicator_canvas.itemconfig(self.indicator, fill=color)
         self.status_label.config(text="Статус: " + ("Включён" if status else "Выключен"))
 
-    # === Трей иконка ===
     def create_tray_icon(self):
         if self.tray_icon is not None:
             return
@@ -491,10 +633,12 @@ class ProxyApp:
         if self.tray_icon is not None:
             self.tray_icon.stop()
         self.stop_server()
+        self.save_traffic_stats()
         self.root.quit()
         os._exit(0)
 
     def on_close(self):
+        """Обработчик закрытия приложения"""
         if self.running:
             if messagebox.askokcancel("Выход", "Сервер работает. Закрыть?"):
                 self.quit_application()
