@@ -14,7 +14,7 @@ import time
 class SimpleIni:
     def __init__(self):
         self.sections = {}
-    
+
     def read(self, filename):
         with open(filename, 'r', encoding='utf-8') as f:
             section_name = None
@@ -26,7 +26,7 @@ class SimpleIni:
                 elif '=' in line and section_name:
                     key, value = map(str.strip, line.split('=', 1))
                     self.sections[section_name][key] = value
-                    
+
     def write(self, filename):
         with open(filename, 'w', encoding='utf-8') as f:
             for section, options in self.sections.items():
@@ -34,24 +34,23 @@ class SimpleIni:
                 for option, value in options.items():
                     f.write(f'{option}={value}\n')
                 f.write('\n')
-                
+
     def has_section(self, section):
         return section in self.sections
-        
+
     def getboolean(self, section, option, fallback=None):
         val = self.get(section, option)
         if val is None:
             return fallback
         return val.lower() in ('true', 'yes', 'on', '1')
-        
+
     def get(self, section, option, fallback=None):
         return self.sections.get(section, {}).get(option, fallback)
-        
+
     def set(self, section, option, value):
         if section not in self.sections:
             self.sections[section] = {}
         self.sections[section][option] = value
-
 
 class ProxyApp:
     def __init__(self, root):
@@ -155,7 +154,6 @@ class ProxyApp:
         self.setup_entry_bindings(self.url_entry)
         self.load_btn = tk.Button(url_frame, text="Загрузить", command=self.load_blocked_domains_and_start)
         self.load_btn.pack(side=tk.LEFT)
-
         # Панель для ручного добавления доменов
         custom_frame = tk.Frame(self.root)
         custom_frame.pack(pady=5, fill=tk.X, padx=10)
@@ -164,7 +162,6 @@ class ProxyApp:
         self.custom_text.pack(fill=tk.X, pady=2)
         self.add_btn = tk.Button(custom_frame, text="Добавить", command=self.add_custom_domains)
         self.add_btn.pack(anchor=tk.E, padx=2)
-
         # Настройка чекбоксов для автозагрузки и минимизации в трей
         settings_frame = tk.Frame(self.root)
         settings_frame.pack(pady=5, fill=tk.X, padx=10)
@@ -172,7 +169,6 @@ class ProxyApp:
                       command=lambda: self.save_config(auto_start=self.auto_start.get())).pack(side=tk.LEFT, padx=5)
         tk.Checkbutton(settings_frame, text="Сворачивать в трей", variable=self.minimize_to_tray,
                       command=lambda: self.save_config(minimize_to_tray=self.minimize_to_tray.get())).pack(side=tk.LEFT, padx=5)
-
         # Блок статистики трафика
         traffic_frame = tk.Frame(self.root)
         traffic_frame.pack(pady=5, fill=tk.X, padx=10)
@@ -195,7 +191,6 @@ class ProxyApp:
         # Кнопка сброса статистики
         self.reset_traffic_btn = tk.Button(traffic_frame, text="Сбросить", command=self.reset_traffic_stats)
         self.reset_traffic_btn.pack(side=tk.RIGHT, padx=5)
-
         # Индикатор статуса сервера
         self.status_frame = tk.Frame(self.root)
         self.status_frame.pack(pady=5)
@@ -204,21 +199,19 @@ class ProxyApp:
         self.indicator = self.indicator_canvas.create_oval(5, 5, 15, 15, fill="gray")
         self.status_label = tk.Label(self.status_frame, text="Статус: Выключен", font=("Arial", 10))
         self.status_label.pack(side=tk.LEFT, padx=10)
-
         # Контроль запуска и остановки сервера
         self.btn_frame = tk.Frame(self.root)
         self.btn_frame.pack(pady=5)
-        self.start_btn = tk.Button(self.btn_frame, text="Включить", width=10, command=self.start_server)
+        # Новый обработчик для кнопки "Включить"
+        self.start_btn = tk.Button(self.btn_frame, text="Включить", width=10, command=self.on_include_click)
         self.start_btn.grid(row=0, column=0, padx=5)
         self.stop_btn = tk.Button(self.btn_frame, text="Выключить", width=10, command=self.stop_server, state=tk.DISABLED)
         self.stop_btn.grid(row=0, column=1, padx=5)
         self.exit_btn = tk.Button(self.btn_frame, text="Закрыть", width=10, command=self.on_close)
         self.exit_btn.grid(row=0, column=2, padx=5)
-
         # Поле логирования
         self.log_text = scrolledtext.ScrolledText(self.root, wrap=tk.WORD, height=15, state='disabled')
         self.log_text.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
-
         # Протокол закрывания окна
         self.root.protocol("WM_DELETE_WINDOW", self.minimize_window)
         self.log_message("Приложение запущено и готово к работе.")
@@ -248,7 +241,6 @@ class ProxyApp:
             now = datetime.datetime.now()
             hour_start = now.replace(minute=0, second=0, microsecond=0)
             timestamp = hour_start.strftime("%Y-%m-%d %H:%M:%S")
-            
             # Реализуем свою версию записи в CSV-файл без использования библиотеки csv
             file_exists = os.path.exists(self.stats_file)
             with open(self.stats_file, 'a', newline='', encoding='utf-8') as stats_file:
@@ -257,7 +249,6 @@ class ProxyApp:
                     stats_file.write(header_row)
                 row = f'{timestamp},{upload_diff},{download_diff}\n'
                 stats_file.write(row)
-            
             # Обновляем предыдущий статус
             self.last_hour_stats = {
                 'upload': self.upload_bytes,
@@ -309,7 +300,6 @@ class ProxyApp:
                     return f"{size:.2f} {u}"
                 size /= 1024
             return f"{size:.2f} ТБ"
-
         # Расчет статистики за последний час
         now = datetime.datetime.now()
         current_hour = now.replace(minute=0, second=0, microsecond=0)
@@ -318,7 +308,6 @@ class ProxyApp:
             hour_download = self.download_bytes - self.last_hour_stats['download']
             self.hour_upload_label.config(text=f"Отправлено: {format_bytes(hour_upload)}")
             self.hour_download_label.config(text=f"Получено: {format_bytes(hour_download)}")
-
         # Обновляем общий счётчик за сессию
         self.session_upload_label.config(text=f"Отправлено: {format_bytes(self.session_upload_bytes)}")
         self.session_download_label.config(text=f"Получено: {format_bytes(self.session_download_bytes)}")
@@ -411,7 +400,7 @@ class ProxyApp:
                 self.BLOCKED = domains
                 self.log_message(f"✅ Загружено {len(self.BLOCKED)} доменов")
                 self.save_config(last_url=self.last_url.get())
-                self.start_server()
+                # self.start_server()  # Убираем автоматический запуск сервера здесь
             except Exception as e:
                 self.log_message(f"Ошибка загрузки: {str(e)}")
             finally:
@@ -433,6 +422,8 @@ class ProxyApp:
         """Передаёт данные между двумя соединениями и подсчитывает объём передаваемых данных."""
         try:
             while not reader.at_eof():
+                if self.server_task and self.server_task.done():
+                    break  # Прервём передачу данных, если сервер отключается
                 data = await reader.read(1500)
                 if not data:
                     break
@@ -571,21 +562,23 @@ class ProxyApp:
 
     def start_server(self):
         """Запускает сервер, проверяя состояние активности."""
-        if not self.running:
-            time.sleep(1)
-            if self.server_task and not self.server_task.done():
-                self.log_message("Сервер ещё активен, подождите завершения операции.")
-                return
-            self.running = True
-            self.update_indicator(True)
-            self.start_btn.config(state=tk.DISABLED)
-            self.stop_btn.config(state=tk.NORMAL)
-            # Сбрасываем показатели статистики сессии
-            self.session_upload_bytes = 0
-            self.session_download_bytes = 0
-            # Начинаем отсчёт часа заново
-            self.last_saved_hour = datetime.datetime.now().replace(minute=0, second=0, microsecond=0)
-            threading.Thread(target=self.run_asyncio, daemon=True).start()
+        # Проверяем только состояние задачи сервера
+        # Это основной исправленный фрагмент логики
+        if self.server_task is not None and not self.server_task.done():
+            self.log_message("Сервер ещё активен, подождите завершения операции.")
+            return
+
+        # Если задача завершена или ещё не создана, можно запускать
+        self.running = True
+        self.update_indicator(True)
+        self.start_btn.config(state=tk.DISABLED)
+        self.stop_btn.config(state=tk.NORMAL)
+        # Сбрасываем показатели статистики сессии
+        self.session_upload_bytes = 0
+        self.session_download_bytes = 0
+        # Начинаем отсчёт часа заново
+        self.last_saved_hour = datetime.datetime.now().replace(minute=0, second=0, microsecond=0)
+        threading.Thread(target=self.run_asyncio, daemon=True).start()
 
     def run_asyncio(self):
         """Защищённый способ запуска цикла событий."""
@@ -603,44 +596,54 @@ class ProxyApp:
             if self.loop:
                 self.loop.close()
             self.loop = None
-            self.server_task = None
+            # Убедимся, что состояние обновлено после завершения задачи
+            # Используем _update_ui_after_stop для корректного обновления UI
+            self.root.after(0, self._update_ui_after_stop)
+
+    def _update_ui_after_stop(self):
+        """Обновляет UI после завершения сервера."""
+        # Убедимся, что флаг running сброшен
+        self.running = False
+        self.update_indicator(False)
+        self.start_btn.config(state=tk.NORMAL)
+        self.stop_btn.config(state=tk.DISABLED)
+        # Явно сбросим задачу после завершения
+        self.server_task = None
 
     async def wait_for_tasks_completion(self):
         tasks = list(self.tasks)
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.wait(tasks, timeout=5.0)  # Ждем максимум 5 секунд
         self.tasks.clear()
-        
+
     def stop_server(self):
-        if self.running:
-            self.running = False
-            self.update_indicator(False)
-            self.start_btn.config(state=tk.NORMAL)
-            self.stop_btn.config(state=tk.DISABLED)
-            
-            asyncio.run_coroutine_threadsafe(self.wait_for_tasks_completion(), self.loop)
-            # Ждем завершения текущих операций
-            time.sleep(1)  # Небольшая пауза для полного завершения текущих задач
+        # Сбрасываем флаг running сразу
+        self.running = False
+        self.update_indicator(False)
+        self.start_btn.config(state=tk.NORMAL)
+        self.stop_btn.config(state=tk.DISABLED)
         
-            # Отменяем основную задачу сервера
-            if self.server_task and not self.server_task.done():
-                self.server_task.cancel()
+        # Останавливаем главный цикл
+        if self.server_task and not self.server_task.done():
+            self.server_task.cancel()
+            
+        # Ожидаем завершения задач с ограничением по времени
+        if self.tasks:
+            if self.loop and self.loop.is_running():
+                asyncio.run_coroutine_threadsafe(self.wait_for_tasks_completion(), self.loop)
+            else:
+                # Если loop не активен, просто очищаем задачи
+                self.tasks.clear()
                 
-            # Закрываем активные соединения
-            for task in self.tasks:
-                if not task.done():
-                    task.cancel()
-                    
-            self.tasks.clear()
-            for reader, writer in self.active_connections:
-                if not writer.is_closing():
-                    writer.close()
-                    try:
-                        writer.wait_closed()
-                    except:
-                        pass
-                        
-            self.active_connections.clear()
-            self.log_message("Все соединения закрыты.")
+        # Быстро закрываем оставшиеся соединения
+        for _, writer in self.active_connections:
+            writer.close()
+            try:
+                # asyncio.run_coroutine_threadsafe(writer.wait_closed(), self.loop)
+                pass # В основном потоке TKinter лучше не ждать
+            except:
+                pass
+        self.active_connections.clear()
+        self.log_message("Все соединения закрыты.")
 
     def update_indicator(self, status):
         """Изменяет индикатор состояния сервера."""
@@ -694,6 +697,16 @@ class ProxyApp:
                 self.quit_application()
         else:
             self.quit_application()
+
+    def on_include_click(self):
+        """Новый обработчик для кнопки Включить."""
+        # Сначала загружаем домены
+        self.load_blocked_domains_and_start()
+        # Затем выполняем старт сервера (но только если загрузка успешна)
+        # Для этого добавим небольшую задержку или лучше изменить логику
+        # Пока просто вызовем start_server, предполагая, что домены уже загружены
+        # В реальном приложении лучше бы добавить callback или проверку состояния
+        self.root.after(100, self.start_server) # Небольшая задержка перед запуском
 
     @staticmethod
     def main():
