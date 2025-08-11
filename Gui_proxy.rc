@@ -1,6 +1,6 @@
 1 VERSIONINFO
-FILEVERSION 1,38,2,0
-PRODUCTVERSION 1,38,2,0
+FILEVERSION 1,39,0,0
+PRODUCTVERSION 1,39,0,0
 FILEOS 0x4
 FILETYPE 1
 {
@@ -12,8 +12,8 @@ FILETYPE 1
             VALUE "ProductName", "Gui_proxy"
             VALUE "LegalCopyright", "Copyright (c) 2025"
             VALUE "CompanyName", "YC"
-            VALUE "FileVersion", "1.38.2"
-            VALUE "ProductVersion", "1.38.2"
+            VALUE "FileVersion", "1.39.0"
+            VALUE "ProductVersion", "1.39.0"
         }
     }
     BLOCK "VarFileInfo"
@@ -21,6 +21,7 @@ FILETYPE 1
         VALUE "Translation", 0x409, 1200
     }
 }
+
 
 
 
