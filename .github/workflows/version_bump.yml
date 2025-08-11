@@ -23,26 +23,27 @@ jobs:
           $VERSION_FILE = "version.txt"
           
           if (Test-Path $VERSION_FILE) {
-            $VERSION = Get-Content -Path $VERSION_FILE -Raw
-            # Убедимся, что версия в правильном формате
+            # Ключевое исправление: используем Trim() для удаления пробелов и переносов
+            $VERSION = (Get-Content -Path $VERSION_FILE -Raw).Trim()
+            # Дополнительная проверка формата
             if ($VERSION -notmatch '^\d+\.\d+\.\d+$') {
-              Write-Host "Invalid version format in version.txt: '$VERSION'. Resetting to 1.37.0"
+              Write-Host "⚠️ Invalid version format in version.txt: '$VERSION'. Resetting to 1.37.0"
               $VERSION = "1.37.0"
               $VERSION | Set-Content -Path $VERSION_FILE
             }
           } else {
             $VERSION = "1.37.0"
             $VERSION | Set-Content -Path $VERSION_FILE
-            Write-Host "Created version.txt with initial version 1.37.0"
+            Write-Host "✅ Created version.txt with initial version 1.37.0"
           }
           
+          Write-Host "📦 Current version: $VERSION"
           echo "CURRENT_VERSION=$VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
         shell: pwsh
       
       - name: Count changed lines since last commit
         id: count_changes
         run: |
-          # Считаем изменения только с последнего коммита (HEAD~1)
           $DIFF = git diff HEAD~1 --shortstat 2>$null
           
           $INSERTIONS = 0
@@ -52,6 +53,7 @@ jobs:
           if ($DIFF -match '(\d+)\s+deletion') { $DELETIONS = [int]$matches[1] }
           
           $TOTAL = $INSERTIONS + $DELETIONS
+          Write-Host "✏️  Changed lines: $TOTAL"
           echo "TOTAL_LINES=$TOTAL" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
         shell: pwsh
       
@@ -69,44 +71,60 @@ jobs:
           $buildNumber++
           $buildNumber | Set-Content $BUILD_FILE
           
+          Write-Host "🔨 Build number: $buildNumber"
           echo "BUILD_NUMBER=$buildNumber" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
         shell: pwsh
       
       - name: Bump version based on changes
         id: bump_version
         run: |
-          $v = ${{ steps.read_version.outputs.CURRENT_VERSION }} -split '\.'
+          $CURRENT_VERSION = "${{ steps.read_version.outputs.CURRENT_VERSION }}".Trim()
+          Write-Host "🔄 Current version: $CURRENT_VERSION"
+          
+          # Добавлена проверка на корректность разбиения версии
+          $v = $CURRENT_VERSION -split '\.'
+          if ($v.Count -lt 3) {
+            Write-Host "❌ Error: Invalid version format '$CURRENT_VERSION'. Expected format x.x.x"
+            exit 1
+          }
+          
           $MAJOR = [int]$v[0]
           $MINOR = [int]$v[1]
           $PATCH = [int]$v[2]
           $TOTAL_LINES = [int]${{ steps.count_changes.outputs.TOTAL_LINES }}
           
+          Write-Host "🔢 Version parts: MAJOR=$MAJOR, MINOR=$MINOR, PATCH=$PATCH"
+          Write-Host "📏 Total changes: $TOTAL_LINES"
+          
           if ($TOTAL_LINES -gt 1000) {
             $MAJOR++
             $MINOR = 0
             $PATCH = 0
+            Write-Host "⏫ Major version bump (>$1000 changes)"
           } elseif ($TOTAL_LINES -gt 10) {
             $MINOR++
             $PATCH = 0
+            Write-Host "⏫ Minor version bump (>$10 changes)"
           } else {
             $PATCH++
+            Write-Host "⏫ Patch version bump (<=10 changes)"
           }
           
           $BUILD_NUMBER = ${{ steps.build_number.outputs.BUILD_NUMBER }}
           $NEW_VERSION = "$MAJOR.$MINOR.$PATCH"
           $FULL_VERSION = "$MAJOR.$MINOR.$PATCH.$BUILD_NUMBER"
           
+          Write-Host "🎉 New version: $NEW_VERSION (build $BUILD_NUMBER)"
           echo "NEW_VERSION=$NEW_VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           echo "FULL_VERSION=$FULL_VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           
           # Сохраняем новую версию в version.txt
           $NEW_VERSION | Set-Content -Path "version.txt"
-          Write-Host "New version: $NEW_VERSION (build $BUILD_NUMBER)"
         shell: pwsh
       
       - name: Create Gui_proxy.rc if missing
         run: |
-          $CURRENT_VERSION = "${{ steps.read_version.outputs.CURRENT_VERSION }}"
+          $CURRENT_VERSION = "${{ steps.read_version.outputs.CURRENT_VERSION }}".Trim()
           $parts = $CURRENT_VERSION -split '\.'
           $FILEVERSION_RC = "$($parts[0]),$($parts[1]),$($parts[2]),0"
           
@@ -136,13 +154,13 @@ jobs:
                   "}" + "`r`n"
             
             $rc | Set-Content -Path "Gui_proxy.rc" -Encoding UTF8
-            Write-Host "Created new Gui_proxy.rc with version $CURRENT_VERSION"
+            Write-Host "✅ Created new Gui_proxy.rc with version $CURRENT_VERSION"
           }
         shell: pwsh
       
       - name: Update RC file with new version
         run: |
-          $NEW_VERSION = "${{ steps.bump_version.outputs.NEW_VERSION }}"
+          $NEW_VERSION = "${{ steps.bump_version.outputs.NEW_VERSION }}".Trim()
           $parts = $NEW_VERSION -split '\.'
           $FILEVERSION = "$($parts[0]),$($parts[1]),$($parts[2]),0"
           
@@ -154,13 +172,13 @@ jobs:
           $content = $content -replace 'VALUE "ProductVersion",\s*"[^"]*"', "VALUE ""ProductVersion"", ""$NEW_VERSION"""
           
           $content | Set-Content -Path "Gui_proxy.rc" -Encoding UTF8
-          Write-Host "Updated RC file to version $NEW_VERSION"
+          Write-Host "✅ Updated RC file to version $NEW_VERSION"
         shell: pwsh
       
       - name: Update README with version info
         run: |
-          $NEW_VERSION = "${{ steps.bump_version.outputs.NEW_VERSION }}"
-          $BUILD_NUMBER = "${{ steps.build_number.outputs.BUILD_NUMBER }}"
+          $NEW_VERSION = "${{ steps.bump_version.outputs.NEW_VERSION }}".Trim()
+          $BUILD_NUMBER = "${{ steps.build_number.outputs.BUILD_NUMBER }}".Trim()
           $DATE = Get-Date -Format "yyyy-MM-dd"
           
           $CHANGELOG_ENTRY = "## [$NEW_VERSION] - $DATE`n`n"
@@ -192,12 +210,12 @@ jobs:
             }
             
             $readme | Set-Content -Path "README.md" -Encoding UTF8
-            Write-Host "Updated README.md with version info"
+            Write-Host "✅ Updated README.md with version info"
           }
           else {
             $newReadme = "# Gui_proxy`n`nApplication description`n`n$CHANGELOG_ENTRY"
             $newReadme | Set-Content -Path "README.md" -Encoding UTF8
-            Write-Host "Created new README.md with version info"
+            Write-Host "✅ Created new README.md with version info"
           }
         shell: pwsh
       
