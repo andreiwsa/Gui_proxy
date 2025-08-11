@@ -1,56 +1,131 @@
-name: Bump Version
+name: Bump Version and Update RC File
 
 on:
   push:
     branches:
-      - main # Можно изменить на вашу основную ветку
+      - main
 
 jobs:
   bump-version:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest  # Используем Windows, чтобы корректно работать с .rc и git
+
     steps:
-      - uses: actions/checkout@v3
-      
-      # Читаем текущую версию
-      - run: |
-          VERSION=$(cat version.txt)
-          echo "Current version is ${VERSION}"
-        
-      # Обновляем номер версии
-      - run: |
-          MAJOR=${VERSION%%.*}
-          MINOR=${VERSION#*.}
-          
-          if [[ "$MINOR" =~ ^([0-9]+)\.([0-9]+)$ ]]; then
-            PATCH=${BASH_REMATCH[2]}
-            MINOR=${BASH_REMATCH[1]}
-            
-            if git diff-index --quiet HEAD --; then
-              # Нет новых изменений, оставляем версию прежней
-              echo "::set-output name=version::${VERSION}"
-            else
-              # Есть новые изменения
-              if [[ $(git log -n 1 --pretty=%B) =~ major|major_update|breaking_change ]]; then
-                NEW_MINOR=$((MINOR + 1))
-                NEW_VERSION="${MAJOR}.${NEW_MINOR}.0"
-              else
-                NEW_PATCH=$((PATCH + 1))
-                NEW_VERSION="${MAJOR}.${MINOR}.${NEW_PATCH}"
-              fi
-              
-              echo "${NEW_VERSION}" > version.txt
-              echo "::set-output name=version::${NEW_VERSION}"
-            fi
-          fi
-        id: update_version
-    
-      # Фиксируем новую версию
-      - run: |
-          git config user.name github-actions
-          git config user.email github-actions@github.com
-          git add version.txt
-          git commit -m "Update version to ${{steps.update_version.outputs.version}}"
-          git tag v${{steps.update_version.outputs.version}}
-          git push origin main --follow-tags
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get last version from tag
+        id: get_version
+        run: |
+          $LAST_TAG = git describe --tags --abbrev=0 2>$null
+          if (!$LAST_TAG) {
+              $LAST_TAG = "v1.37.0"  # fallback
+          }
+          $VERSION = $LAST_TAG -replace '^v', ''
+          Write-Host "CURRENT_VERSION=$VERSION"
+          echo "CURRENT_VERSION=$VERSION" >> $env:GITHUB_OUTPUT
+        shell: pwsh
+
+      - name: Count changed lines
+        id: count_changes
+        run: |
+          $LAST_TAG = git describe --tags --abbrev=0 2>$null
+          if (!$LAST_TAG) { $LAST_TAG = "HEAD~1" }
+
+          $DIFF = git diff $LAST_TAG --shortstat | Out-String
+          $MATCH = [regex]::Match($DIFF, '(\d+) insertion.*?(\d+) deletion')
+          $INSERTIONS = 0
+          $DELETIONS = 0
+          if ($MATCH.Success) {
+              $INSERTIONS = [int]$MATCH.Groups[1].Value
+              $DELETIONS = [int]$MATCH.Groups[2].Value
+          }
+          $TOTAL = $INSERTIONS + $DELETIONS
+          Write-Host "Total changed lines: $TOTAL"
+          echo "TOTAL_LINES=$TOTAL" >> $env:GITHUB_OUTPUT
+        shell: pwsh
+
+      - name: Bump version
+        id: bump_version
+        run: |
+          $MAJOR, $MINOR, $PATCH = ${{ steps.get_version.outputs.CURRENT_VERSION }} -split '\.'
+          $TOTAL_LINES = ${{ steps.count_changes.outputs.TOTAL_LINES }}
+
+          if ($TOTAL_LINES -gt 1000) {
+              $MAJOR = [int]$MAJOR + 1
+              $MINOR = 0
+              $PATCH = 0
+          } elseif ($TOTAL_LINES -gt 10) {
+              $MINOR = [int]$MINOR + 1
+              $PATCH = 0
+          } else {
+              $PATCH = [int]$PATCH + 1
+          }
+
+          $NEW_VERSION = "$MAJOR.$MINOR.$PATCH"
+          Write-Host "New version: $NEW_VERSION"
+          echo "NEW_VERSION=$NEW_VERSION" >> $env:GITHUB_OUTPUT
+        shell: pwsh
+
+      - name: Ensure Gui_proxy.rc exists
+        run: |
+          $RC_PATH = "Gui_proxy.rc"
+          if (!(Test-Path $RC_PATH)) {
+              Write-Host "Creating Gui_proxy.rc..."
+              $RC_CONTENT = @"
+1 VERSIONINFO
+FILEVERSION 1,37,0,0
+PRODUCTVERSION 1,37,0,0
+FILEOS 0x4
+FILETYPE 1
+{
+    BLOCK "StringFileInfo"
+    {
+        BLOCK "040904B0"
+        {
+            VALUE "FileDescription", "Gui_proxy Application"
+            VALUE "ProductName", "Gui_proxy"
+            VALUE "LegalCopyright", "Copyright (c) 2024"
+            VALUE "CompanyName", "Your Company"
+            VALUE "FileVersion", "${{ steps.get_version.outputs.CURRENT_VERSION }}"
+            VALUE "ProductVersion", "${{ steps.get_version.outputs.CURRENT_VERSION }}"
+        }
+    }
+    BLOCK "VarFileInfo"
+    {
+        VALUE "Translation", 0x409, 1200
+    }
+}
+"@
+              Set-Content -Path $RC_PATH -Value $RC_CONTENT
+          }
+        shell: pwsh
+
+      - name: Update Gui_proxy.rc with new version
+        run: |
+          $NEW_VERSION = "${{ steps.bump_version.outputs.NEW_VERSION }}"
+          $VERSION_PARTS = $NEW_VERSION -split '\.'
+          $FILEVERSION = $VERSION_PARTS[0] + "," + $VERSION_PARTS[1] + "," + $VERSION_PARTS[2] + ",0"
+
+          $CONTENT = Get-Content Gui_proxy.rc -Raw
+          $CONTENT = $CONTENT -replace 'FILEVERSION \d+,\d+,\d+,0', "FILEVERSION $FILEVERSION"
+          $CONTENT = $CONTENT -replace 'PRODUCTVERSION \d+,\d+,\d+,0', "PRODUCTVERSION $FILEVERSION"
+          $CONTENT = $CONTENT -replace 'VALUE "FileVersion", "[^"]*"', "VALUE `"FileVersion`", `"$NEW_VERSION`""
+          $CONTENT = $CONTENT -replace 'VALUE "ProductVersion", "[^"]*"', "VALUE `"ProductVersion`", `"$NEW_VERSION`""
+
+          Set-Content -Path Gui_proxy.rc -Value $CONTENT
+          Write-Host "Updated Gui_proxy.rc to version $NEW_VERSION"
+        shell: pwsh
+
+      - name: Commit and tag new version
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add Gui_proxy.rc
+          git commit -m "chore: bump version to v${{ steps.bump_version.outputs.NEW_VERSION }} [skip ci]"
+          git tag "v${{ steps.bump_version.outputs.NEW_VERSION }}"
+          git push origin main
+          git push origin "v${{ steps.bump_version.outputs.NEW_VERSION }}"
+        shell: cmd
