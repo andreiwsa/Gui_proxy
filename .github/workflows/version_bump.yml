@@ -2,7 +2,141 @@ name: Bump Version and Update RC File
 
 on:
   push:
+    branches:name: Bump Version and Update RC File
+
+on:
+  push:
     branches:
+      - main
+
+jobs:
+  bump-version:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get last version from tag
+        id: get_version
+        run: |
+          $LAST_TAG = git describe --tags --abbrev=0 2>$null
+          if (!$LAST_TAG) {
+              $LAST_TAG = "v1.37.0"
+          }
+          $VERSION = $LAST_TAG -replace '^v', ''
+          Write-Host "Current version: $VERSION"
+          echo "CURRENT_VERSION=$VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+        shell: pwsh
+
+      - name: Count changed lines
+        id: count_changes
+        run: |
+          $LAST_TAG = git describe --tags --abbrev=0 2>$null
+          if (!$LAST_TAG) { $LAST_TAG = "HEAD~1" }
+
+          $DIFF = git diff $LAST_TAG --shortstat | Out-String
+          $MATCH = [regex]::Match($DIFF, '(\d+) insertion.*?(\d+) deletion')
+          $INSERTIONS = 0
+          $DELETIONS = 0
+          if ($MATCH.Success) {
+              $INSERTIONS = [int]$MATCH.Groups[1].Value
+              $DELETIONS = [int]$MATCH.Groups[2].Value
+          }
+          $TOTAL = $INSERTIONS + $DELETIONS
+          Write-Host "Total changed lines: $TOTAL"
+          echo "TOTAL_LINES=$TOTAL" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+        shell: pwsh
+
+      - name: Bump version
+        id: bump_version
+        run: |
+          $parts = ${{ steps.get_version.outputs.CURRENT_VERSION }} -split '\.'
+          $MAJOR = [int]$parts[0]
+          $MINOR = [int]$parts[1]
+          $PATCH = [int]$parts[2]
+          $TOTAL_LINES = [int]${{ steps.count_changes.outputs.TOTAL_LINES }}
+
+          if ($TOTAL_LINES -gt 1000) {
+              $MAJOR++
+              $MINOR = 0
+              $PATCH = 0
+          } elseif ($TOTAL_LINES -gt 10) {
+              $MINOR++
+              $PATCH = 0
+          } else {
+              $PATCH++
+          }
+
+          $NEW_VERSION = "$MAJOR.$MINOR.$PATCH"
+          Write-Host "New version: $NEW_VERSION"
+          echo "NEW_VERSION=$NEW_VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+        shell: pwsh
+
+      - name: Ensure Gui_proxy.rc exists
+        run: |
+          $RC_PATH = "Gui_proxy.rc"
+          if (-not (Test-Path $RC_PATH)) {
+              Write-Host "Creating Gui_proxy.rc..."
+              $RC_CONTENT = @"
+1 VERSIONINFO
+FILEVERSION 1,37,0,0
+PRODUCTVERSION 1,37,0,0
+FILEOS 0x4
+FILETYPE 1
+{
+    BLOCK "StringFileInfo"
+    {
+        BLOCK "040904B0"
+        {
+            VALUE "FileDescription", "Gui_proxy Application"
+            VALUE "ProductName", "Gui_proxy"
+            VALUE "LegalCopyright", "Copyright (c) 2024"
+            VALUE "CompanyName", "Your Company"
+            VALUE "FileVersion", "1.37.0"
+            VALUE "ProductVersion", "1.37.0"
+        }
+    }
+    BLOCK "VarFileInfo"
+    {
+        VALUE "Translation", 0x409, 1200
+    }
+}
+"@
+              Set-Content -Path $RC_PATH -Value $RC_CONTENT -Encoding UTF8
+          }
+        shell: pwsh
+
+      - name: Update Gui_proxy.rc with new version
+        run: |
+          $NEW_VERSION = "${{ steps.bump_version.outputs.NEW_VERSION }}"
+          $VERSION_PARTS = $NEW_VERSION -split '\.'
+          $FILEVERSION = $VERSION_PARTS[0] + "," + $VERSION_PARTS[1] + "," + $VERSION_PARTS[2] + ",0"
+
+          $CONTENT = Get-Content "Gui_proxy.rc" -Raw
+          $CONTENT = $CONTENT -replace 'FILEVERSION \d+,\d+,\d+,\d+', "FILEVERSION $FILEVERSION"
+          $CONTENT = $CONTENT -replace 'PRODUCTVERSION \d+,\d+,\d+,\d+', "PRODUCTVERSION $FILEVERSION"
+          $CONTENT = $CONTENT -replace 'VALUE "FileVersion", "[^"]*"', "VALUE `"FileVersion`", `"$NEW_VERSION`""
+          $CONTENT = $CONTENT -replace 'VALUE "ProductVersion", "[^"]*"', "VALUE `"ProductVersion`", `"$NEW_VERSION`""
+
+          Set-Content -Path "Gui_proxy.rc" -Value $CONTENT -Encoding UTF8
+          Write-Host "✅ Updated Gui_proxy.rc to version $NEW_VERSION"
+        shell: pwsh
+
+      - name: Commit and push version update
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add Gui_proxy.rc
+          git commit -m "chore: version bump to v${{ steps.bump_version.outputs.NEW_VERSION }}" || exit 0
+
+          git tag "v${{ steps.bump_version.outputs.NEW_VERSION }}"
+          git push origin main
+          git push origin "v${{ steps.bump_version.outputs.NEW_VERSION }}"
+        shell: cmd
       - main
 
 jobs:
