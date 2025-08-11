@@ -2,13 +2,11 @@ name: Bump Version and Update RC File
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
 
 jobs:
   bump-version:
     runs-on: windows-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -116,10 +114,10 @@ FILETYPE 1
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
+          
           git add Gui_proxy.rc
           git commit -m "chore: version bump to v${{ steps.bump_version.outputs.NEW_VERSION }}" || exit 0
-
+          
           git tag "v${{ steps.bump_version.outputs.NEW_VERSION }}"
           git push origin main
           git push origin "v${{ steps.bump_version.outputs.NEW_VERSION }}"
