@@ -17,41 +17,34 @@ jobs:
           fetch-depth: 0
           token: ${{ github.token }}
       
-      - name: Get last version from tag
-        id: get_version
+      - name: Read or initialize version
+        id: read_version
         run: |
-          $LAST_TAG = git describe --tags --abbrev=0 2>$null
-          # Проверяем, что тег содержит корректную версию x.x.x
-          if ($LAST_TAG -and $LAST_TAG -match 'v?(\d+\.\d+\.\d+)') {
-            $VERSION = $matches[1]
-          } else {
-            # Если тегов нет или формат некорректный - ищем в RC-файле
-            if (Test-Path "Gui_proxy.rc") {
-              $content = Get-Content -Path "Gui_proxy.rc" -Raw
-              if ($content -match 'VALUE "FileVersion",\s*"(\d+\.\d+\.\d+)"') {
-                $VERSION = $matches[1]
-              } else {
-                $VERSION = "1.37.0"
-              }
-            } else {
+          $VERSION_FILE = "version.txt"
+          
+          if (Test-Path $VERSION_FILE) {
+            $VERSION = Get-Content -Path $VERSION_FILE -Raw
+            # Убедимся, что версия в правильном формате
+            if ($VERSION -notmatch '^\d+\.\d+\.\d+$') {
+              Write-Host "Invalid version format in version.txt: '$VERSION'. Resetting to 1.37.0"
               $VERSION = "1.37.0"
+              $VERSION | Set-Content -Path $VERSION_FILE
             }
+          } else {
+            $VERSION = "1.37.0"
+            $VERSION | Set-Content -Path $VERSION_FILE
+            Write-Host "Created version.txt with initial version 1.37.0"
           }
+          
           echo "CURRENT_VERSION=$VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
         shell: pwsh
       
-      # Остальные шаги без изменений...
-      - name: Count changed lines
+      - name: Count changed lines since last commit
         id: count_changes
         run: |
-          $LAST_TAG = git describe --tags --abbrev=0 2>$null
-          if (-not $LAST_TAG -or $LAST_TAG -notmatch '\d+\.\d+\.\d+') { 
-            $LAST_TAG = "HEAD~1" 
-          } else {
-            $LAST_TAG = "${LAST_TAG}^..HEAD"
-          }
+          # Считаем изменения только с последнего коммита (HEAD~1)
+          $DIFF = git diff HEAD~1 --shortstat 2>$null
           
-          $DIFF = git diff $LAST_TAG --shortstat
           $INSERTIONS = 0
           $DELETIONS = 0
           
@@ -79,10 +72,10 @@ jobs:
           echo "BUILD_NUMBER=$buildNumber" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
         shell: pwsh
       
-      - name: Bump version
+      - name: Bump version based on changes
         id: bump_version
         run: |
-          $v = ${{ steps.get_version.outputs.CURRENT_VERSION }} -split '\.'
+          $v = ${{ steps.read_version.outputs.CURRENT_VERSION }} -split '\.'
           $MAJOR = [int]$v[0]
           $MINOR = [int]$v[1]
           $PATCH = [int]$v[2]
@@ -105,11 +98,15 @@ jobs:
           
           echo "NEW_VERSION=$NEW_VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           echo "FULL_VERSION=$FULL_VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          
+          # Сохраняем новую версию в version.txt
+          $NEW_VERSION | Set-Content -Path "version.txt"
+          Write-Host "New version: $NEW_VERSION (build $BUILD_NUMBER)"
         shell: pwsh
       
       - name: Create Gui_proxy.rc if missing
         run: |
-          $CURRENT_VERSION = "${{ steps.get_version.outputs.CURRENT_VERSION }}"
+          $CURRENT_VERSION = "${{ steps.read_version.outputs.CURRENT_VERSION }}"
           $parts = $CURRENT_VERSION -split '\.'
           $FILEVERSION_RC = "$($parts[0]),$($parts[1]),$($parts[2]),0"
           
@@ -146,7 +143,6 @@ jobs:
       - name: Update RC file with new version
         run: |
           $NEW_VERSION = "${{ steps.bump_version.outputs.NEW_VERSION }}"
-          $FULL_VERSION = "${{ steps.bump_version.outputs.FULL_VERSION }}"
           $parts = $NEW_VERSION -split '\.'
           $FILEVERSION = "$($parts[0]),$($parts[1]),$($parts[2]),0"
           
@@ -158,13 +154,12 @@ jobs:
           $content = $content -replace 'VALUE "ProductVersion",\s*"[^"]*"', "VALUE ""ProductVersion"", ""$NEW_VERSION"""
           
           $content | Set-Content -Path "Gui_proxy.rc" -Encoding UTF8
-          Write-Host "Updated RC file to version $NEW_VERSION (build $FULL_VERSION)"
+          Write-Host "Updated RC file to version $NEW_VERSION"
         shell: pwsh
       
       - name: Update README with version info
         run: |
           $NEW_VERSION = "${{ steps.bump_version.outputs.NEW_VERSION }}"
-          $FULL_VERSION = "${{ steps.bump_version.outputs.FULL_VERSION }}"
           $BUILD_NUMBER = "${{ steps.build_number.outputs.BUILD_NUMBER }}"
           $DATE = Get-Date -Format "yyyy-MM-dd"
           
@@ -211,7 +206,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          git add Gui_proxy.rc .build_number README.md
+          git add Gui_proxy.rc .build_number README.md version.txt
           
           if [ -n "$(git status --porcelain)" ]; then
             git commit -m "chore: version bump to v${{ steps.bump_version.outputs.NEW_VERSION }} (build ${{ steps.build_number.outputs.BUILD_NUMBER }})"
