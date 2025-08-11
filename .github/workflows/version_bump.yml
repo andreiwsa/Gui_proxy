@@ -1,0 +1,56 @@
+name: Bump Version
+
+on:
+  push:
+    branches:
+      - main # Можно изменить на вашу основную ветку
+
+jobs:
+  bump-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      # Читаем текущую версию
+      - run: |
+          VERSION=$(cat version.txt)
+          echo "Current version is ${VERSION}"
+        
+      # Обновляем номер версии
+      - run: |
+          MAJOR=${VERSION%%.*}
+          MINOR=${VERSION#*.}
+          
+          if [[ "$MINOR" =~ ^([0-9]+)\.([0-9]+)$ ]]; then
+            PATCH=${BASH_REMATCH[2]}
+            MINOR=${BASH_REMATCH[1]}
+            
+            if git diff-index --quiet HEAD --; then
+              # Нет новых изменений, оставляем версию прежней
+              echo "::set-output name=version::${VERSION}"
+            else
+              # Есть новые изменения
+              if [[ $(git log -n 1 --pretty=%B) =~ major|major_update|breaking_change ]]; then
+                NEW_MINOR=$((MINOR + 1))
+                NEW_VERSION="${MAJOR}.${NEW_MINOR}.0"
+              else
+                NEW_PATCH=$((PATCH + 1))
+                NEW_VERSION="${MAJOR}.${MINOR}.${NEW_PATCH}"
+              fi
+              
+              echo "${NEW_VERSION}" > version.txt
+              echo "::set-output name=version::${NEW_VERSION}"
+            fi
+          fi
+        id: update_version
+    
+      # Фиксируем новую версию
+      - run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add version.txt
+          git commit -m "Update version to ${{steps.update_version.outputs.version}}"
+          git tag v${{steps.update_version.outputs.version}}
+          git push origin main --follow-tags
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
