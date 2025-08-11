@@ -3,6 +3,11 @@ on:
   push:
     branches:
       - main
+
+# Grant write permissions to the GITHUB_TOKEN
+permissions:
+  contents: write
+
 jobs:
   bump-version:
     runs-on: windows-latest
@@ -11,6 +16,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # Ensure we can push back using the GITHUB_TOKEN
+          token: ${{ github.token }}
+      
       - name: Get last version from tag
         id: get_version
         run: >
@@ -22,6 +30,7 @@ jobs:
 
           echo "CURRENT_VERSION=$VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
         shell: pwsh
+      
       - name: Count changed lines
         id: count_changes
         run: >
@@ -33,36 +42,26 @@ jobs:
             $LAST_TAG = "${LAST_TAG}^..HEAD"
           }
 
-
           $DIFF = git diff $LAST_TAG --shortstat
 
           $INSERTIONS = 0
-
           $DELETIONS = 0
 
-
           if ($DIFF -match '(\d+)\s+insertion') { $INSERTIONS = [int]$matches[1] }
-
           if ($DIFF -match '(\d+)\s+deletion') { $DELETIONS = [int]$matches[1] }
 
-
           $TOTAL = $INSERTIONS + $DELETIONS
-
           echo "TOTAL_LINES=$TOTAL" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
         shell: pwsh
+      
       - name: Bump version
         id: bump_version
         run: >
           $v = ${{ steps.get_version.outputs.CURRENT_VERSION }} -split '\.'
-
           $MAJOR = [int]$v[0]
-
           $MINOR = [int]$v[1]
-
           $PATCH = [int]$v[2]
-
           $TOTAL_LINES = [int]${{ steps.count_changes.outputs.TOTAL_LINES }}
-
 
           if ($TOTAL_LINES -gt 1000) {
             $MAJOR++
@@ -75,11 +74,10 @@ jobs:
             $PATCH++
           }
 
-
           $NEW_VERSION = "$MAJOR.$MINOR.$PATCH"
-
           echo "NEW_VERSION=$NEW_VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
         shell: pwsh
+      
       - name: Create Gui_proxy.rc if missing
         run: |
           $CURRENT_VERSION = "${{ steps.get_version.outputs.CURRENT_VERSION }}"
@@ -99,8 +97,8 @@ jobs:
                   "        {" + "`r`n" +
                   "            VALUE `"FileDescription`", `"Gui_proxy Application`"`r`n" +
                   "            VALUE `"ProductName`", `"Gui_proxy`"`r`n" +
-                  "            VALUE `"LegalCopyright`", `"Copyright (c) 2025`"`r`n" +
-                  "            VALUE `"CompanyName`", `"YC`"`r`n" +
+                  "            VALUE `"LegalCopyright`", `"Copyright (c) 2024`"`r`n" +
+                  "            VALUE `"CompanyName`", `"Your Company`"`r`n" +
                   "            VALUE `"FileVersion`", `"$CURRENT_VERSION`"`r`n" +
                   "            VALUE `"ProductVersion`", `"$CURRENT_VERSION`"`r`n" +
                   "        }" + "`r`n" +
@@ -115,51 +113,41 @@ jobs:
             Write-Host "Created new Gui_proxy.rc with version $CURRENT_VERSION"
           }
         shell: pwsh
+      
       - name: Update RC file with new version
         run: >
           $NEW_VERSION = "${{ steps.bump_version.outputs.NEW_VERSION }}"
 
           $parts = $NEW_VERSION -split '\.'
-
           $FILEVERSION = "$($parts[0]),$($parts[1]),$($parts[2]),0"
-
 
           $content = Get-Content -Path "Gui_proxy.rc" -Raw
 
-
-          # Update numeric version formats (comma-separated)
-
           $content = $content -replace 'FILEVERSION \d+,\d+,\d+,\d+', "FILEVERSION $FILEVERSION"
-
           $content = $content -replace 'PRODUCTVERSION \d+,\d+,\d+,\d+', "PRODUCTVERSION $FILEVERSION"
-
-
-          # Update string version formats (quoted)
-
           $content = $content -replace 'VALUE "FileVersion", "[^"]*"', "VALUE ""FileVersion"", ""$NEW_VERSION"""
-
           $content = $content -replace 'VALUE "ProductVersion", "[^"]*"', "VALUE ""ProductVersion"", ""$NEW_VERSION"""
 
-
           $content | Set-Content -Path "Gui_proxy.rc" -Encoding UTF8
-
           Write-Host "Updated RC file to version $NEW_VERSION"
         shell: pwsh
+      
       - name: Commit and tag new version
         run: >
           git config user.name "github-actions[bot]"
-
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-
           git add Gui_proxy.rc
-
-          git commit -m "chore: version bump to v${{ steps.bump_version.outputs.NEW_VERSION }}" || exit 0
-
-
-          git tag "v${{ steps.bump_version.outputs.NEW_VERSION }}"
-
-          git push origin main --force-with-lease
-
-          git push origin "v${{ steps.bump_version.outputs.NEW_VERSION }}"
+          
+          # Only commit if there are changes
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit -m "chore: version bump to v${{ steps.bump_version.outputs.NEW_VERSION }}"
+            git tag "v${{ steps.bump_version.outputs.NEW_VERSION }}"
+            
+            # Push changes (no --force-with-lease needed)
+            git push origin main
+            git push origin "v${{ steps.bump_version.outputs.NEW_VERSION }}"
+          else
+            echo "No changes to commit"
+          fi
         shell: bash
