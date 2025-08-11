@@ -67,7 +67,7 @@ jobs:
         run: |
           if (-not (Test-Path "Gui_proxy.rc")) {
             $rc = @"
-1 VERSIONINFO
+VERSIONINFO
 FILEVERSION 1,37,0,0
 PRODUCTVERSION 1,37,0,0
 FILEOS 0x4
@@ -104,8 +104,8 @@ FILETYPE 1
           $content = Get-Content -Path "Gui_proxy.rc" -Raw
           $content = $content -replace 'FILEVERSION \d+,\d+,\d+,\d+', "FILEVERSION $FILEVERSION"
           $content = $content -replace 'PRODUCTVERSION \d+,\d+,\d+,\d+', "PRODUCTVERSION $FILEVERSION"
-          $content = $content -replace 'VALUE "FileVersion", "[^"]*"', "VALUE `"FileVersion`", `"$NEW_VERSION`""
-          $content = $content -replace 'VALUE "ProductVersion", "[^"]*"', "VALUE `"ProductVersion`", `"$NEW_VERSION`""
+          $content = $content -replace 'VALUE "FileVersion", "[^"]*"', "VALUE "FileVersion", "$NEW_VERSION""
+          $content = $content -replace 'VALUE "ProductVersion", "[^"]*"', "VALUE "ProductVersion", "$NEW_VERSION""
 
           $content | Set-Content -Path "Gui_proxy.rc" -Encoding UTF8
         shell: pwsh
