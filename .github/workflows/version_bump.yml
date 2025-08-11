@@ -21,7 +21,19 @@ jobs:
         id: get_version
         run: |
           $LAST_TAG = git describe --tags --abbrev=0 2>$null
-          if (-not $LAST_TAG) { $LAST_TAG = "v1.37.0" }
+          if (-not $LAST_TAG) {
+            # Если нет тегов, ищем версию в Gui_proxy.rc
+            if (Test-Path "Gui_proxy.rc") {
+              $content = Get-Content -Path "Gui_proxy.rc" -Raw
+              if ($content -match 'VALUE "FileVersion", "(\d+\.\d+\.\d+)"') {
+                $LAST_TAG = "v$($matches[1])"
+              } else {
+                $LAST_TAG = "v1.37.0"
+              }
+            } else {
+              $LAST_TAG = "v1.37.0"
+            }
+          }
           $VERSION = $LAST_TAG -replace '^v', ''
           echo "CURRENT_VERSION=$VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
         shell: pwsh
@@ -47,6 +59,23 @@ jobs:
           echo "TOTAL_LINES=$TOTAL" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
         shell: pwsh
       
+      - name: Get or initialize build number
+        id: build_number
+        run: |
+          $BUILD_FILE = ".build_number"
+          
+          if (Test-Path $BUILD_FILE) {
+            $buildNumber = [int](Get-Content $BUILD_FILE)
+          } else {
+            $buildNumber = 0
+          }
+          
+          $buildNumber++
+          $buildNumber | Set-Content $BUILD_FILE
+          
+          echo "BUILD_NUMBER=$buildNumber" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+        shell: pwsh
+      
       - name: Bump version
         id: bump_version
         run: |
@@ -67,8 +96,12 @@ jobs:
             $PATCH++
           }
           
+          $BUILD_NUMBER = ${{ steps.build_number.outputs.BUILD_NUMBER }}
           $NEW_VERSION = "$MAJOR.$MINOR.$PATCH"
+          $FULL_VERSION = "$MAJOR.$MINOR.$PATCH.$BUILD_NUMBER"
+          
           echo "NEW_VERSION=$NEW_VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          echo "FULL_VERSION=$FULL_VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
         shell: pwsh
       
       - name: Create Gui_proxy.rc if missing
@@ -110,6 +143,7 @@ jobs:
       - name: Update RC file with new version
         run: |
           $NEW_VERSION = "${{ steps.bump_version.outputs.NEW_VERSION }}"
+          $FULL_VERSION = "${{ steps.bump_version.outputs.FULL_VERSION }}"
           $parts = $NEW_VERSION -split '\.'
           $FILEVERSION = "$($parts[0]),$($parts[1]),$($parts[2]),0"
           
@@ -121,21 +155,70 @@ jobs:
           $content = $content -replace 'VALUE "ProductVersion", "[^"]*"', "VALUE ""ProductVersion"", ""$NEW_VERSION"""
           
           $content | Set-Content -Path "Gui_proxy.rc" -Encoding UTF8
-          Write-Host "Updated RC file to version $NEW_VERSION"
+          Write-Host "Updated RC file to version $NEW_VERSION (build $FULL_VERSION)"
         shell: pwsh
       
-      - name: Commit and tag new version
+      - name: Update README with version info
+        run: |
+          $NEW_VERSION = "${{ steps.bump_version.outputs.NEW_VERSION }}"
+          $FULL_VERSION = "${{ steps.bump_version.outputs.FULL_VERSION }}"
+          $BUILD_NUMBER = "${{ steps.build_number.outputs.BUILD_NUMBER }}"
+          $DATE = Get-Date -Format "yyyy-MM-dd"
+          
+          $CHANGELOG_ENTRY = "## [$NEW_VERSION] - $DATE`n`n"
+          
+          # Добавляем информацию о количестве изменений
+          $TOTAL_LINES = ${{ steps.count_changes.outputs.TOTAL_LINES }}
+          $CHANGELOG_ENTRY += "- Обновлено $TOTAL_LINES строк кода`n"
+          
+          if ($TOTAL_LINES -gt 1000) {
+            $CHANGELOG_ENTRY += "- Major release (значительные изменения)`n"
+          } elseif ($TOTAL_LINES -gt 10) {
+            $CHANGELOG_ENTRY += "- Minor release (новые функции)`n"
+          } else {
+            $CHANGELOG_ENTRY += "- Patch release (исправления ошибок)`n"
+          }
+          
+          $CHANGELOG_ENTRY += "`nBuild number: $BUILD_NUMBER`n`n---`n`n"
+          
+          # Обновляем README
+          if (Test-Path "README.md") {
+            $readme = Get-Content -Path "README.md" -Raw
+            
+            # Если есть раздел "## Changelog", добавляем перед ним
+            if ($readme -match '##\s*Changelog') {
+              $readme = $readme -replace '(##\s*Changelog)', "$CHANGELOG_ENTRY`$1"
+            } 
+            # Или если есть раздел "## Version History"
+            elseif ($readme -match '##\s*Version History') {
+              $readme = $readme -replace '(##\s*Version History)', "$CHANGELOG_ENTRY`$1"
+            }
+            # Или добавляем в начало файла
+            else {
+              $readme = $CHANGELOG_ENTRY + $readme
+            }
+            
+            $readme | Set-Content -Path "README.md" -Encoding UTF8
+            Write-Host "Updated README.md with version info"
+          }
+          else {
+            # Создаем новый README, если его нет
+            $newReadme = "# Gui_proxy`n`nApplication description`n`n$CHANGELOG_ENTRY"
+            $newReadme | Set-Content -Path "README.md" -Encoding UTF8
+            Write-Host "Created new README.md with version info"
+          }
+        shell: pwsh
+      
+      - name: Commit version changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          git add Gui_proxy.rc
+          git add Gui_proxy.rc .build_number README.md
           
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "chore: version bump to v${{ steps.bump_version.outputs.NEW_VERSION }}"
-            git tag "v${{ steps.bump_version.outputs.NEW_VERSION }}"
+            git commit -m "chore: version bump to v${{ steps.bump_version.outputs.NEW_VERSION }} (build ${{ steps.build_number.outputs.BUILD_NUMBER }})"
             git push origin main
-            git push origin "v${{ steps.bump_version.outputs.NEW_VERSION }}"
           else
             echo "No changes to commit"
           fi
