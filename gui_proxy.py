@@ -95,11 +95,11 @@ class ProxyApp:
         # Инициализация переменных
         self.server_task: Optional[asyncio.Task] = None
         self.loop: Optional[asyncio.AbstractEventLoop] = None
-        self.stop_event = asyncio.Event()  # Используем событие для управления остановкой
+        self.running = False
         self.tasks: list = []
         self.active_connections: list = []
         self.log_size = 0
-        self.max_log_size = 1024 * 1024  # 1 MB
+        self.max_log_size = 8 * 1024 * 1024  # 8 MB
         self.BLOCKED: Set[bytes] = set()
         self.tray_icon = None
         self.server = None  # Объект сервера
@@ -235,14 +235,14 @@ class ProxyApp:
         settings_content = ttk.Frame(settings_frame)
         settings_content.pack(fill=tk.X, padx=5, pady=5)
         ttk.Checkbutton(
-            settings_content,
-            text="Автостарт прокси",
+            settings_content, 
+            text="Автостарт прокси", 
             variable=self.auto_start,
             command=lambda: self.save_config(auto_start=self.auto_start.get())
         ).grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
         ttk.Checkbutton(
-            settings_content,
-            text="Сворачивать в трей",
+            settings_content, 
+            text="Сворачивать в трей", 
             variable=self.minimize_to_tray,
             command=lambda: self.save_config(minimize_to_tray=self.minimize_to_tray.get())
         ).grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
@@ -271,8 +271,8 @@ class ProxyApp:
 
         # Кнопка сброса статистики
         self.reset_traffic_btn = ttk.Button(
-            traffic_frame,
-            text="Сбросить",
+            traffic_frame, 
+            text="Сбросить", 
             command=self.reset_traffic_stats
         )
         self.reset_traffic_btn.pack(anchor=tk.E, padx=5, pady=5)
@@ -290,24 +290,24 @@ class ProxyApp:
         control_frame = ttk.Frame(main_frame)
         control_frame.pack(fill=tk.X, pady=(0, 10))
         self.start_btn = ttk.Button(
-            control_frame,
-            text="Включить",
-            width=10,
+            control_frame, 
+            text="Включить", 
+            width=10, 
             command=self.start_proxy
         )
         self.start_btn.pack(side=tk.LEFT, padx=5)
         self.stop_btn = ttk.Button(
-            control_frame,
-            text="Выключить",
-            width=10,
+            control_frame, 
+            text="Выключить", 
+            width=10, 
             command=self.stop_server,
             state=tk.DISABLED
         )
         self.stop_btn.pack(side=tk.LEFT, padx=5)
         self.exit_btn = ttk.Button(
-            control_frame,
-            text="Закрыть",
-            width=10,
+            control_frame, 
+            text="Закрыть", 
+            width=10, 
             command=self.on_close
         )
         self.exit_btn.pack(side=tk.RIGHT, padx=5)
@@ -316,13 +316,23 @@ class ProxyApp:
         log_frame = ttk.LabelFrame(main_frame, text="Журнал событий")
         log_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         self.log_text = scrolledtext.ScrolledText(
-            log_frame,
-            wrap=tk.WORD,
+            log_frame, 
+            wrap=tk.WORD, 
             height=12,
             state='disabled',
             font=("Consolas", 9)
         )
         self.log_text.pack(padx=5, pady=5, fill=tk.BOTH, expand=True)
+
+        # Кнопка выгрузки лога
+        export_frame = ttk.Frame(log_frame)
+        export_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+        self.export_log_btn = ttk.Button(
+            export_frame,
+            text="Выгрузить лог",
+            command=self.save_log_to_file
+        )
+        self.export_log_btn.pack(side=tk.RIGHT)
 
     def start_stats_timer(self) -> None:
         """Инициализирует таймер для регулярного сохранения статистики трафика."""
@@ -455,13 +465,15 @@ class ProxyApp:
             self.log_text.config(state='disabled')
             self.log_text.see(tk.END)
             self.log_size += len(full_message.encode('utf-8'))
-            # Ограничиваем максимальный объем журнала
+
+            # Ограничиваем максимальный объем журнала до 8MB
             if self.log_size >= self.max_log_size:
-                self.save_log_to_file()
-            # Ограничиваем количество записей в окне
-            if len(self.log_text.get("1.0", tk.END)) > 5000:  # ~5000 строк
+                self.log_message("Достигнут лимит размера лога (8 МБ). Выгрузите лог вручную.")
+
+            # Ограничиваем количество записей в окне (для производительности)
+            if len(self.log_text.get("1.0", tk.END)) > 10000:  # ~10000 строк
                 self.log_text.config(state='normal')
-                self.log_text.delete("1.0", "1000.0")  # Удаляем первые 1000 строк
+                self.log_text.delete("1.0", "2000.0")  # Удаляем первые 2000 строк
                 self.log_text.config(state='disabled')
 
         self.root.after(0, append)
@@ -475,7 +487,7 @@ class ProxyApp:
             with open(filename, "w", encoding="utf-8") as f:
                 f.write(content)
             self.log_message(f"Журнал сохранён: {filename}")
-            self.log_size = 0
+            # Не сбрасываем log_size, чтобы пользователь мог продолжать работать с логом
         except Exception as e:
             self.log_message(f"Ошибка сохранения журнала: {e}")
 
@@ -515,12 +527,11 @@ class ProxyApp:
                     async for chunk in resp.content.iter_chunked(1024):
                         chunks.append(chunk)
                         downloaded += len(chunk)
-                        if total_size > 0 and downloaded % (1024*10) == 0:  # Обновляем реже
+                        if total_size > 0:
                             progress = min(90, 20 + int(70 * downloaded / total_size))
                             self.root.after(0, lambda p=progress: self._update_loading_status("Получение данных...", p))
                     text = b''.join(chunks).decode('utf-8', 'ignore')
                     domains = set()
-                                                                                                                                                              
                     for line in text.splitlines():
                         stripped = line.strip()
                         if not stripped or stripped.startswith('#'):
@@ -601,7 +612,7 @@ class ProxyApp:
         try:
             while not reader.at_eof():
                 # Проверяем, не отменена ли задача сервера
-                if self.stop_event.is_set():
+                if self.server_task and self.server_task.done():
                     break
                 data = await reader.read(1500)
                 if not data:
@@ -633,70 +644,6 @@ class ProxyApp:
                 except:
                     pass
 
-    # --- НОВАЯ ФУНКЦИЯ ---
-    async def fragmenting_pipe(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, is_upload: bool) -> None:
-        """Фрагментирует и передаёт данные между двумя соединениями. Подсчитывает объём передаваемых данных."""
-        try:
-            while not reader.at_eof():
-                if self.stop_event.is_set():
-                    break
-                data = await reader.read(1500)
-                if not data:
-                    break
-
-                # Фрагментируем каждый блок данных
-                while data:
-                    part_len = random.randint(1, len(data))
-                    # Создаем новый SSL-заголовок:
-                    # - Первые 2 байта: 0x16 0x03 (тип и основная версия)
-                    # - Третий байт: Копируем из оригинального заголовка (это ИСПРАВЛЕНИЕ!)
-                    # - Последние 2 байта: длина фрагмента
-                    fragment_header = (
-                        bytes.fromhex("1603") +
-                        self.original_tls_version_byte +  # Исправление: используем сохраненный байт версии
-                        part_len.to_bytes(2, byteorder='big')
-                    )
-                    fragment = fragment_header + data[:part_len]
-                    data = data[part_len:]
-
-                    writer.write(fragment)
-                    await writer.drain()
-
-                # Подсчет объема трафика (суммируем все фрагменты)
-                size = len(data)  # Это неверно, нужно суммировать все part_len
-                # Но для простоты, мы считаем, что весь блок `data` был отправлен, хотя он был разбит.
-                # Более точный подсчет требует суммирования всех `part_len` в цикле while data: выше.
-                # Для простоты оставим как есть, так как ошибка незначительна.
-                if is_upload:
-                    self.upload_bytes += size
-                    self.session_upload_bytes += size
-                else:
-                    # Это странно: фрагментировать будем только исходящий трафик (от клиента к серверу)
-                    # Входящий трафик (от сервера к клиенту) передаем как есть.
-                    # Поэтому этот блок для is_upload=False в этой функции никогда не должен вызываться.
-                    # Но для универсальности оставим.
-                    self.download_bytes += size
-                    self.session_download_bytes += size
-
-                # Обновляем GUI
-                current_time = asyncio.get_event_loop().time()
-                if current_time - self.last_update_time > 0.5:
-                    self.last_update_time = current_time
-                    self.root.after(0, self.update_traffic_stats)
-
-        except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError, OSError):
-            pass
-        except Exception as e:
-            self.log_message(f"[FRAGMENTING_PIPE] Ошибка: {e}")
-        finally:
-            if not writer.is_closing():
-                writer.close()
-                try:
-                    await writer.wait_closed()
-                except:
-                    pass
-    # --- КОНЕЦ НОВОЙ ФУНКЦИИ ---
-
     async def fragment_data(self, local_reader: asyncio.StreamReader, remote_writer: asyncio.StreamWriter) -> None:
         """Осуществляет фрагментирование HTTP-запросов согласно логике nodpi.py."""
         try:
@@ -704,77 +651,37 @@ class ProxyApp:
             head = await local_reader.read(5)
             if len(head) < 5:
                 return
-
-            # --- ИСПРАВЛЕНИЕ: Сохраняем оригинальный байт версии TLS ---
-            self.original_tls_version_byte = head[2:3]  # Сохраняем третий байт
-            # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
-
-            # Читаем первый блок данных
+            # Читаем данные фиксированного размера (как в nodpi.py)
             data = await local_reader.read(1500)
             if not data:
                 return
-
             # Проверяем, содержится ли заблокированный домен в данных
             if all(site not in data for site in self.BLOCKED):
                 # Если заблокированных доменов нет, отправляем данные как есть
                 remote_writer.write(head + data)
                 await remote_writer.drain()
                 return
-
-            # Если заблокированные домены найдены, фрагментируем первый пакет
-            self.log_message("Фрагментировано соединение (первый пакет).")
+            # Если заблокированные домены найдены, фрагментируем данные
+            self.log_message("Фрагментировано соединение.")
             parts = []
             while data:
-                                                                                                                             
+                # Случайный размер фрагмента от 1 до длины оставшихся данных
                 part_len = random.randint(1, len(data))
-                # Создаем новый SSL-заголовок с сохраненным байтом версии
-                                                                                                        
-                                                                                                                                                     
-                                                 
+                # Создаем новый SSL-заголовок с рандомизацией:
+                # - bytes.fromhex("1603") - тип записи и основная версия SSL/TLS
+                # - случайный байт для подверсии (ключевое отличие от текущей реализации!)
+                # - длина фрагмента
                 fragment_header = (
-                    bytes.fromhex("1603") +
-                    self.original_tls_version_byte +  # Исправление: используем сохраненный байт
+                    bytes.fromhex("1603") + 
+                    bytes([random.randint(0, 255)]) + 
                     part_len.to_bytes(2, byteorder='big')
                 )
-                                                                     
+                # Добавляем фрагмент в список
                 parts.append(fragment_header + data[:part_len])
                 data = data[part_len:]
-
-            # Отправляем фрагментированный первый пакет
+            # Отправляем все фрагменты
             remote_writer.write(b''.join(parts))
             await remote_writer.drain()
-
-            # --- ВАЖНОЕ ДОПОЛНЕНИЕ: Теперь нужно фрагментировать ВЕСЬ последующий трафик ---
-            # Мы не можем просто вернуться, нужно запустить `fragmenting_pipe` для оставшихся данных.
-            # Но у нас уже есть `local_reader`, и мы прочитали из него первый блок `data`.
-            # Нам нужно создать новый `StreamReader` или как-то вернуть `data` обратно.
-            # Самый простой способ — создать `StreamReader` вручную и "запушить" в него `data`.
-            # Однако, стандартный `StreamReader` не имеет публичного метода для этого.
-            # Альтернатива: создать новую задачу `fragmenting_pipe`, которая будет читать из `local_reader`,
-            # но нам нужно передать ей уже прочитанные данные.
-
-            # Создаем задачу для фрагментации всего последующего трафика от клиента к серверу
-            # Мы передаем уже прочитанные данные через замыкание или создаем новый reader.
-            # Для простоты, создадим задачу, которая сначала отправит `data` (если оно не пустое), а затем начнет читать из `local_reader`.
-            # Но это дублирует логику. Лучше модифицировать `fragmenting_pipe`, чтобы она принимала начальные данные.
-
-            # В данном случае, для простоты интеграции, мы просто запустим `fragmenting_pipe`,
-            # предполагая, что первый блок уже обработан, а `fragmenting_pipe` будет обрабатывать все последующие.
-            # Это не совсем точно, но для демонстрации подойдет.
-            # Более правильный способ — переписать `handle_connection`, чтобы он передавал управление
-            # либо `pipe`, либо `fragmenting_pipe` после обработки CONNECT и первого пакета.
-
-            # Запускаем задачу для фрагментации всего последующего исходящего трафика
-            # task = asyncio.create_task(self.fragmenting_pipe(local_reader, remote_writer, is_upload=True))
-            # self.tasks.append(task)
-            # # Ждем завершения этой задачи (или отмены)
-            # await task
-
-            # Поскольку изменение `handle_connection` требует более глубокой переработки, оставим это как TODO.
-            # В текущей реализации фрагментируется только первый пакет, что лучше, чем ничего, но не идеально.
-
-            # TODO: Переработать `handle_connection` для использования `fragmenting_pipe` для всего трафика после первого пакета.
-
         except Exception as e:
             self.log_message(f"[FRAGMENT] Ошибка: {e}")
 
@@ -785,22 +692,16 @@ class ProxyApp:
             return
         conn_id = f"{addr[0]}:{addr[1]}"
         self.log_message(f"Новое подключение: {conn_id}")
-
-        # Добавляем соединение в список активных для возможности его закрытия при остановке
-        self.active_connections.append((local_reader, local_writer))
-
         try:
             # Таймаут на получение данных
             http_data = await asyncio.wait_for(local_reader.read(1500), timeout=10.0)
             if not http_data:
                 return
-
             # Проверяем, является ли запрос CONNECT
             first_line = http_data.split(b"\r\n")[0]
             parts = first_line.split(b" ")
             if len(parts) < 3 or parts[0] != b"CONNECT":
                 return
-
             # Извлекаем хост и порт
             try:
                 host_port = parts[1].split(b":")
@@ -811,66 +712,50 @@ class ProxyApp:
             except (ValueError, IndexError) as e:
                 self.log_message(f"Некорректный CONNECT запрос: {parts[1]} — {e}")
                 return
-
             try:
                 host_str = host.decode('idna') if host.isascii() else host.decode('utf-8', 'ignore')
             except UnicodeDecodeError:
                 host_str = host.decode('latin-1', 'ignore')
-
             self.log_message(f"Проксируем: {host_str}:{port}")
-
             # Отправляем подтверждение
             local_writer.write(b'HTTP/1.1 200 Connection Established\r\n\r\n')
             await local_writer.drain()
-
             try:
                 # Подключаемся к целевому серверу
                 remote_reader, remote_writer = await asyncio.wait_for(
-                    asyncio.open_connection(host_str, port),
+                    asyncio.open_connection(host_str, port), 
                     timeout=10.0
                 )
-                # Добавляем удаленное соединение в список активных
                 self.active_connections.append((remote_reader, remote_writer))
             except Exception as e:
                 self.log_message(f"Ошибка подключения к {host_str}:{port}: {e}")
                 return
-
             try:
                 # Обработка HTTPS-трафика (порт 443)
                 if port == 443:
                     await self.fragment_data(local_reader, remote_writer)
-                    # TODO: После fragment_data, нужно запустить fragmenting_pipe для всего последующего трафика.
-                    # Пока запускаем обычный pipe, что означает, что фрагментируется только первый пакет.
-                    task1 = asyncio.create_task(self.pipe(local_reader, remote_writer, is_upload=True))
-                else:
-                    # Для не-HTTPS портов используем обычный pipe
-                    task1 = asyncio.create_task(self.pipe(local_reader, remote_writer, is_upload=True))
-
+                # Создаем задачи для двусторонней передачи данных
+                task1 = asyncio.create_task(self.pipe(local_reader, remote_writer, is_upload=True))
                 task2 = asyncio.create_task(self.pipe(remote_reader, local_writer, is_upload=False))
                 self.tasks.extend([task1, task2])
                 await asyncio.gather(task1, task2, return_exceptions=True)
-
             except Exception as e:
                 self.log_message(f"[CONNECTION] Ошибка передачи: {e}")
-
-                                                                                        
-                                                                             
-                                                                                  
-                                                                            
-                    
-                                         
-                                                     
-                       
-                        
+            finally:
+                # Удаляем соединение из списка активных
+                if (remote_reader, remote_writer) in self.active_connections:
+                    self.active_connections.remove((remote_reader, remote_writer))
+                # Закрываем удаленные соединения
+                try:
+                    remote_writer.close()
+                    await remote_writer.wait_closed()
+                except:
+                    pass
         except asyncio.TimeoutError:
             self.log_message(f"Тайм-аут подключения от {conn_id}")
         except Exception as e:
             self.log_message(f"[HANDLER] Ошибка: {e}")
         finally:
-            # Удаляем соединения из списка активных
-            if (local_reader, local_writer) in self.active_connections:
-                self.active_connections.remove((local_reader, local_writer))
-
             # Закрываем локальное соединение
             try:
                 local_writer.close()
@@ -911,29 +796,22 @@ class ProxyApp:
 
     def start_server(self) -> None:
         """Запускает сервер с проверкой состояния."""
-        if self.stop_event.is_set():
+        if self.running:
             self.log_message("Сервер уже запущен.")
             return
         if not self.BLOCKED:
             self.log_message("Список блокируемых доменов пуст. Сначала загрузите домены.")
             return
-
-                                   
-                                                
-                                             
+        self.running = True
+        self.update_indicator(True)
+        self.start_btn.config(state=tk.DISABLED)
+        self.stop_btn.config(state=tk.NORMAL)
         # Сбрасываем показатели статистики сессии
         self.session_upload_bytes = 0
         self.session_download_bytes = 0
         self.update_traffic_stats()
         # Начинаем отсчёт часа заново
         self.last_saved_hour = datetime.datetime.now().replace(minute=0, second=0, microsecond=0)
-
-        # Сбрасываем событие остановки
-        self.stop_event.clear()
-        self.update_indicator(True)
-        self.start_btn.config(state=tk.DISABLED)
-        self.stop_btn.config(state=tk.NORMAL)
-
         # Запускаем сервер в отдельном потоке
         threading.Thread(target=self.run_asyncio, daemon=True).start()
 
@@ -954,7 +832,7 @@ class ProxyApp:
 
     def _update_ui_after_stop(self) -> None:
         """Обновляет интерфейс после остановки сервера."""
-                            
+        self.running = False
         self.update_indicator(False)
         self.start_btn.config(state=tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
@@ -966,7 +844,7 @@ class ProxyApp:
         if not self.tasks:
             return
         done, pending = await asyncio.wait(
-            self.tasks,
+            self.tasks, 
             timeout=5.0,
             return_when=asyncio.ALL_COMPLETED
         )
@@ -981,35 +859,27 @@ class ProxyApp:
 
     def stop_server(self) -> None:
         """Останавливает сервер и все активные соединения."""
-        if self.stop_event.is_set():
+        if not self.running:
             return
-
-        # Устанавливаем флаг остановки
-        self.stop_event.set()
+        self.running = False
         self.update_indicator(False)
         self.start_btn.config(state=tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
-
-                                                            
-                                     
-        # Закрываем все активные соединения
-        for reader, writer in self.active_connections[:]:
+        # Отменяем основную задачу сервера
+        if self.server_task and not self.server_task.done():
+            self.server_task.cancel()
+        # Закрываем активные соединения
+        for _, writer in self.active_connections[:]:
             try:
                 writer.close()
             except:
                 pass
         self.active_connections.clear()
-
-        # Отменяем основную задачу сервера
-        if self.server_task and not self.server_task.done():
-            self.server_task.cancel()
-
         # Ожидаем завершения задач
         if self.tasks and self.loop and self.loop.is_running():
             asyncio.run_coroutine_threadsafe(self.wait_for_tasks_completion(), self.loop)
         else:
             self.tasks.clear()
-
         self.log_message("Сервер останавливается...")
 
     def update_indicator(self, status: bool) -> None:
@@ -1025,17 +895,17 @@ class ProxyApp:
         # Создаем изображение для иконки
         image = Image.new('RGB', (64, 64), color=(50, 50, 50))
         draw = ImageDraw.Draw(image)
-        draw.ellipse((16, 16, 48, 48), fill="green" if not self.stop_event.is_set() else "gray")
+        draw.ellipse((16, 16, 48, 48), fill="green" if self.running else "gray")
         menu = (
             pystray.MenuItem('Открыть', self.restore_window),
-            pystray.MenuItem('Включить прокси', self.start_server, enabled=self.stop_event.is_set()),
-            pystray.MenuItem('Выключить прокси', self.stop_server, enabled=not self.stop_event.is_set()),
+            pystray.MenuItem('Включить прокси', self.start_server, enabled=not self.running),
+            pystray.MenuItem('Выключить прокси', self.stop_server, enabled=self.running),
             pystray.MenuItem('Выход', self.quit_application)
         )
         self.tray_icon = pystray.Icon(
-            "proxy_icon",
-            image,
-            "HTTPS Прокси",
+            "proxy_icon", 
+            image, 
+            "HTTPS Прокси", 
             menu
         )
         threading.Thread(target=self.tray_icon.run, daemon=True).start()
@@ -1074,7 +944,7 @@ class ProxyApp:
 
     def on_close(self) -> None:
         """Обработчик события закрытия окна приложения."""
-        if not self.stop_event.is_set():
+        if self.running:
             if messagebox.askokcancel("Выход", "Прокси-сервер всё ещё работает. Завершить?"):
                 self.quit_application()
         else:
