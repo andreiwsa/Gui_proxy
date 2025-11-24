@@ -1,7 +1,7 @@
 import random
 import asyncio
 import tkinter as tk
-from tkinter import messagebox, scrolledtext, ttk
+from tkinter import messagebox, scrolledtext, ttk, filedialog
 import datetime
 import aiohttp
 import threading
@@ -11,16 +11,13 @@ import os
 import re
 import logging
 from typing import Set, Tuple, Optional, Dict, Any
-
 # Настройка логгера для внутреннего использования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ProxyApp")
-
 class SimpleIni:
     """Улучшенная реализация INI-файла с проверкой типов и безопасной записью."""
     def __init__(self):
         self.sections: Dict[str, Dict[str, str]] = {}
-
     def read(self, filename: str) -> None:
         """Безопасное чтение INI-файла с обработкой ошибок."""
         try:
@@ -38,7 +35,6 @@ class SimpleIni:
                         self.sections[section_name][key] = value
         except Exception as e:
             logger.error(f"Ошибка чтения конфигурации: {e}")
-
     def write(self, filename: str) -> None:
         """Безопасная запись INI-файла с временным файлом для целостности данных."""
         try:
@@ -56,16 +52,13 @@ class SimpleIni:
                 os.rename(temp_filename, filename)
         except Exception as e:
             logger.error(f"Ошибка записи конфигурации: {e}")
-
     def has_section(self, section: str) -> bool:
         return section in self.sections
-
     def getboolean(self, section: str, option: str, fallback: Optional[bool] = None) -> bool:
         val = self.get(section, option)
         if val is None:
             return fallback if fallback is not None else False
         return val.lower() in ('true', 'yes', 'on', '1', 'y')
-
     def getint(self, section: str, option: str, fallback: Optional[int] = None) -> int:
         val = self.get(section, option)
         if val is None:
@@ -74,15 +67,12 @@ class SimpleIni:
             return int(val)
         except (TypeError, ValueError):
             return fallback if fallback is not None else 0
-
     def get(self, section: str, option: str, fallback: Optional[str] = None) -> Optional[str]:
         return self.sections.get(section, {}).get(option, fallback)
-
     def set(self, section: str, option: str, value: Any) -> None:
         if section not in self.sections:
             self.sections[section] = {}
         self.sections[section][option] = str(value)
-
 class ProxyApp:
     """Основной класс приложения с HTTPS прокси и графическим интерфейсом."""
     def __init__(self, root: tk.Tk):
@@ -91,7 +81,6 @@ class ProxyApp:
         self.root.geometry("800x650")
         self.root.minsize(800, 800)
         self.root.resizable(True, True)
-
         # Инициализация переменных
         self.server_task: Optional[asyncio.Task] = None
         self.loop: Optional[asyncio.AbstractEventLoop] = None
@@ -103,7 +92,6 @@ class ProxyApp:
         self.BLOCKED: Set[bytes] = set()
         self.tray_icon = None
         self.server = None  # Объект сервера
-
         # Переменные для учета трафика
         self.upload_bytes = 0
         self.download_bytes = 0
@@ -113,38 +101,31 @@ class ProxyApp:
         self.last_hour_stats = {'upload': 0, 'download': 0}
         self.stats_file = "traffic_stats.csv"
         self.last_saved_hour = None
-
         # Параметры по умолчанию
         self.default_url = "https://github.com/andreiwsa/pacbl/releases/download/v09082025/youtube-domain.txt"
         self.config_file = "proxy_config.ini"
-
         # Инициализация конфигурации
         self.config = SimpleIni()
-
         # UI-переменные
         self.auto_start = tk.BooleanVar(value=False)
         self.minimize_to_tray = tk.BooleanVar(value=True)
         self.last_url = tk.StringVar(value=self.default_url)
         self.loading_progress = tk.DoubleVar(value=0)
         self.loading_status = tk.StringVar(value="Готов")
-
+        # Добавляем переменную для хранения пути к файлу
+        self.last_file_path = tk.StringVar(value="")
         # Загрузка конфигурации
         self.load_config()
-
         # Создание интерфейса
         self.create_gui()
-
         # Автозапуск, если настроено
         if self.auto_start.get():
             self.root.after(100, self.load_blocked_domains_and_start)
-
         # Таймер для периодического сохранения статистики
         self.start_stats_timer()
-
         # Регистрация обработчика завершения работы
         self.root.protocol("WM_DELETE_WINDOW", self.minimize_window)
         self.log_message("Приложение запущено и готово к работе.")
-
     def save_config(self, **kwargs) -> None:
         """Сохраняет текущую конфигурацию с обработкой ошибок."""
         try:
@@ -157,11 +138,11 @@ class ProxyApp:
             self.config.set('Settings', 'auto_start', str(self.auto_start.get()))
             self.config.set('Settings', 'minimize_to_tray', str(self.minimize_to_tray.get()))
             self.config.set('Settings', 'last_url', self.last_url.get())
+            self.config.set('Settings', 'last_file_path', self.last_file_path.get())
             # Дополнительные параметры
             self.config.write(self.config_file)
         except Exception as e:
             self.log_message(f"Ошибка сохранения настроек: {e}")
-
     def load_config(self) -> None:
         """Загружает конфигурацию из файла с проверкой значений."""
         # Чтение конфигурации
@@ -176,6 +157,11 @@ class ProxyApp:
             else:
                 self.last_url.set(self.default_url)
                 self.log_message("Некорректный URL в конфигурации, использован URL по умолчанию")
+            
+            # Загружаем путь к последнему файлу
+            file_path = self.config.get('Settings', 'last_file_path', "")
+            if file_path and os.path.exists(file_path):
+                self.last_file_path.set(f"Последний файл: {os.path.basename(file_path)}")
         except Exception as e:
             self.log_message(f"Ошибка парсинга конфига: {e}, использованы значения по умолчанию")
             self.auto_start.set(False)
@@ -183,7 +169,6 @@ class ProxyApp:
             self.last_url.set(self.default_url)
         # Сохраняем конфигурацию с актуальными значениями
         self.save_config()
-
     def is_valid_url(self, url: str) -> bool:
         """Проверяет корректность URL с использованием регулярного выражения."""
         url_pattern = re.compile(
@@ -194,17 +179,14 @@ class ProxyApp:
             re.IGNORECASE
         )
         return bool(url_pattern.match(url))
-
     def create_gui(self) -> None:
         """Создает графический интерфейс с улучшенной структурой и элементами."""
         # Создаем основные фреймы
         main_frame = ttk.Frame(self.root)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
         # Фрейм для URL и загрузки
         url_frame = ttk.LabelFrame(main_frame, text="Настройки блокировки доменов")
         url_frame.pack(fill=tk.X, pady=(0, 10))
-
         # URL ввод
         ttk.Label(url_frame, text="URL списка доменов:").pack(anchor=tk.W, padx=5, pady=(5, 0))
         url_entry_frame = ttk.Frame(url_frame)
@@ -214,7 +196,19 @@ class ProxyApp:
         self.setup_entry_bindings(self.url_entry)
         self.load_btn = ttk.Button(url_entry_frame, text="Загрузить", command=self.load_blocked_domains_and_start)
         self.load_btn.pack(side=tk.RIGHT, padx=(5, 0))
-
+        
+        # Добавляем кнопку для загрузки из файла
+        file_frame = ttk.Frame(url_frame)
+        file_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+        self.load_file_btn = ttk.Button(
+            file_frame, 
+            text="Загрузить из файла", 
+            command=self.load_domains_from_file
+        )
+        self.load_file_btn.pack(side=tk.LEFT)
+        
+        ttk.Label(file_frame, textvariable=self.last_file_path, foreground="gray").pack(side=tk.LEFT, padx=(10, 0))
+        
         # Фрейм для ручного добавления доменов
         custom_frame = ttk.LabelFrame(main_frame, text="Ручное добавление доменов")
         custom_frame.pack(fill=tk.X, pady=(0, 10))
@@ -228,7 +222,6 @@ class ProxyApp:
         self.custom_text['yscrollcommand'] = scrollbar.set
         self.add_btn = ttk.Button(custom_frame, text="Добавить", command=self.add_custom_domains)
         self.add_btn.pack(anchor=tk.E, padx=5, pady=5)
-
         # Настройки приложения
         settings_frame = ttk.LabelFrame(main_frame, text="Настройки приложения")
         settings_frame.pack(fill=tk.X, pady=(0, 10))
@@ -246,11 +239,9 @@ class ProxyApp:
             variable=self.minimize_to_tray,
             command=lambda: self.save_config(minimize_to_tray=self.minimize_to_tray.get())
         ).grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
-
         # Статистика трафика
         traffic_frame = ttk.LabelFrame(main_frame, text="Статистика трафика")
         traffic_frame.pack(fill=tk.X, pady=(0, 10))
-
         # Статистика за последний час
         hour_frame = ttk.Frame(traffic_frame)
         hour_frame.pack(fill=tk.X, padx=5, pady=5)
@@ -259,7 +250,6 @@ class ProxyApp:
         self.hour_upload_label.pack(side=tk.LEFT, padx=10)
         self.hour_download_label = ttk.Label(hour_frame, text="Получено: 0 Б")
         self.hour_download_label.pack(side=tk.LEFT)
-
         # Статистика за текущую сессию
         session_frame = ttk.Frame(traffic_frame)
         session_frame.pack(fill=tk.X, padx=5, pady=5)
@@ -268,7 +258,6 @@ class ProxyApp:
         self.session_upload_label.pack(side=tk.LEFT, padx=10)
         self.session_download_label = ttk.Label(session_frame, text="Получено: 0 Б")
         self.session_download_label.pack(side=tk.LEFT)
-
         # Кнопка сброса статистики
         self.reset_traffic_btn = ttk.Button(
             traffic_frame, 
@@ -276,7 +265,6 @@ class ProxyApp:
             command=self.reset_traffic_stats
         )
         self.reset_traffic_btn.pack(anchor=tk.E, padx=5, pady=5)
-
         # Индикатор статуса сервера
         status_frame = ttk.Frame(main_frame)
         status_frame.pack(fill=tk.X, pady=(0, 10))
@@ -285,7 +273,6 @@ class ProxyApp:
         self.indicator = self.indicator_canvas.create_oval(5, 5, 15, 15, fill="gray")
         self.status_label = ttk.Label(status_frame, text="Статус: Выключен", font=("Arial", 10))
         self.status_label.pack(side=tk.LEFT, padx=10)
-
         # Контроль запуска и остановки сервера
         control_frame = ttk.Frame(main_frame)
         control_frame.pack(fill=tk.X, pady=(0, 10))
@@ -311,7 +298,6 @@ class ProxyApp:
             command=self.on_close
         )
         self.exit_btn.pack(side=tk.RIGHT, padx=5)
-
         # Поле логирования
         log_frame = ttk.LabelFrame(main_frame, text="Журнал событий")
         log_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
@@ -323,7 +309,6 @@ class ProxyApp:
             font=("Consolas", 9)
         )
         self.log_text.pack(padx=5, pady=5, fill=tk.BOTH, expand=True)
-
         # Кнопка выгрузки лога
         export_frame = ttk.Frame(log_frame)
         export_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
@@ -333,7 +318,6 @@ class ProxyApp:
             command=self.save_log_to_file
         )
         self.export_log_btn.pack(side=tk.RIGHT)
-
     def start_stats_timer(self) -> None:
         """Инициализирует таймер для регулярного сохранения статистики трафика."""
         def check_and_save_stats() -> None:
@@ -351,9 +335,7 @@ class ProxyApp:
                 self.log_message(f"Ошибка в таймере статистики: {e}")
             finally:
                 self.root.after(60000, check_and_save_stats)  # Проверять каждые 60 секунд
-
         self.root.after(60000, check_and_save_stats)  # Первый запуск через минуту
-
     def save_traffic_stats(self) -> None:
         """Сохраняет статистику трафика за последний час в CSV-файл."""
         try:
@@ -381,20 +363,17 @@ class ProxyApp:
             self.log_message(f"Сохранена статистика за час: Отправлено {upload_diff} Б, Получено {download_diff} Б")
         except Exception as e:
             self.log_message(f"Ошибка сохранения статистики: {e}")
-
     def setup_entry_bindings(self, entry: ttk.Entry) -> None:
         """Настраивает горячие клавиши для копирования-вставки текста."""
         entry.bind("<Control-c>", lambda e: self.copy_to_clipboard(entry))
         entry.bind("<Control-v>", lambda e: self.paste_from_clipboard(entry))
         entry.bind("<Control-x>", lambda e: self.cut_to_clipboard(entry))
         entry.bind("<Control-a>", self.select_all)
-
     def select_all(self, event: tk.Event) -> str:
         """Выделяет весь текст в поле ввода."""
         event.widget.select_range(0, tk.END)
         event.widget.icursor(tk.END)
         return "break"
-
     def copy_to_clipboard(self, entry: ttk.Entry) -> None:
         """Копирует выделенный текст в буфер обмена."""
         try:
@@ -404,7 +383,6 @@ class ProxyApp:
                 self.root.clipboard_append(text)
         except tk.TclError:
             pass
-
     def paste_from_clipboard(self, entry: ttk.Entry) -> None:
         """Вставляет текст из буфера обмена в элемент ввода."""
         try:
@@ -415,13 +393,11 @@ class ProxyApp:
                 entry.insert(tk.INSERT, text)
         except tk.TclError:
             pass
-
     def cut_to_clipboard(self, entry: ttk.Entry) -> None:
         """Вырезает выделенный текст и помещает его в буфер обмена."""
         self.copy_to_clipboard(entry)
         if entry.selection_present():
             entry.delete(tk.SEL_FIRST, tk.SEL_LAST)
-
     def update_traffic_stats(self) -> None:
         """Обновляет визуализацию статистики трафика."""
         def format_bytes(size: float) -> str:
@@ -431,7 +407,6 @@ class ProxyApp:
                     return f"{size:.2f} {unit}"
                 size /= 1024.0
             return f"{size:.2f} ТБ"
-
         # Расчет статистики за последний час
         now = datetime.datetime.now()
         current_hour = now.replace(minute=0, second=0, microsecond=0)
@@ -440,11 +415,9 @@ class ProxyApp:
             hour_download = self.download_bytes - self.last_hour_stats['download']
             self.hour_upload_label.config(text=f"Отправлено: {format_bytes(hour_upload)}")
             self.hour_download_label.config(text=f"Получено: {format_bytes(hour_download)}")
-
         # Обновляем общий счётчик за сессию
         self.session_upload_label.config(text=f"Отправлено: {format_bytes(self.session_upload_bytes)}")
         self.session_download_label.config(text=f"Получено: {format_bytes(self.session_download_bytes)}")
-
     def reset_traffic_stats(self) -> None:
         """Очищает статистику трафика и сбрасывает её отображение."""
         self.upload_bytes = 0
@@ -454,7 +427,6 @@ class ProxyApp:
         self.last_hour_stats = {'upload': 0, 'download': 0}
         self.update_traffic_stats()
         self.log_message("Статистика трафика была успешно очищена.")
-
     def log_message(self, message: str) -> None:
         """Выводит сообщение в окно лога с ограничением размера."""
         def append() -> None:
@@ -465,19 +437,15 @@ class ProxyApp:
             self.log_text.config(state='disabled')
             self.log_text.see(tk.END)
             self.log_size += len(full_message.encode('utf-8'))
-
             # Ограничиваем максимальный объем журнала до 8MB
             if self.log_size >= self.max_log_size:
                 self.log_message("Достигнут лимит размера лога (8 МБ). Выгрузите лог вручную.")
-
             # Ограничиваем количество записей в окне (для производительности)
             if len(self.log_text.get("1.0", tk.END)) > 10000:  # ~10000 строк
                 self.log_text.config(state='normal')
                 self.log_text.delete("1.0", "2000.0")  # Удаляем первые 2000 строк
                 self.log_text.config(state='disabled')
-
         self.root.after(0, append)
-
     def save_log_to_file(self) -> None:
         """Сохраняет лог-файл на диск."""
         try:
@@ -490,7 +458,6 @@ class ProxyApp:
             # Не сбрасываем log_size, чтобы пользователь мог продолжать работать с логом
         except Exception as e:
             self.log_message(f"Ошибка сохранения журнала: {e}")
-
     def add_custom_domains(self) -> None:
         """Добавляет указанные пользователем домены в блокировку."""
         text = self.custom_text.get("1.0", tk.END).strip()
@@ -510,56 +477,89 @@ class ProxyApp:
                 continue
         self.custom_text.delete("1.0", tk.END)
         self.log_message(f"Добавлено вручную доменов: {new_count}")
-
-    async def fetch_domains(self, url: str) -> Set[bytes]:
-        """Асинхронно получает список заблокированных доменов по указанному URL."""
-        self.root.after(0, lambda: self._update_loading_status("Загрузка...", 0))
-        async with aiohttp.ClientSession() as session:
+    
+    def load_domains_from_file(self) -> None:
+        """Загружает домены из локального файла."""
+        file_path = filedialog.askopenfilename(
+            title="Выберите файл со списком доменов",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        
+        if not file_path:
+            return
+            
+        self.last_file_path.set(f"Последний файл: {os.path.basename(file_path)}")
+        self.load_file_btn.config(state=tk.DISABLED)
+        self._update_loading_status("Чтение файла...", 0)
+        
+        async def async_load_file() -> None:
             try:
-                self.root.after(0, lambda: self._update_loading_status("Подключение...", 10))
-                async with session.get(url, timeout=30) as resp:
-                    if resp.status != 200:
-                        raise Exception(f"HTTP {resp.status} {resp.reason}")
-                    total_size = int(resp.headers.get('Content-Length', 0))
-                    downloaded = 0
-                    chunks = []
-                    self.root.after(0, lambda: self._update_loading_status("Получение данных...", 20))
-                    async for chunk in resp.content.iter_chunked(1024):
-                        chunks.append(chunk)
-                        downloaded += len(chunk)
-                        if total_size > 0:
-                            progress = min(90, 20 + int(70 * downloaded / total_size))
-                            self.root.after(0, lambda p=progress: self._update_loading_status("Получение данных...", p))
-                    text = b''.join(chunks).decode('utf-8', 'ignore')
-                    domains = set()
-                    for line in text.splitlines():
-                        stripped = line.strip()
-                        if not stripped or stripped.startswith('#'):
-                            continue
-                        try:
-                            # Пытаемся закодировать домен в IDNA
-                            domain_bytes = stripped.encode('idna')
-                            domains.add(domain_bytes)
-                        except Exception as e:
-                            try:
-                                # Если IDNA не работает, используем UTF-8
-                                domain_bytes = stripped.encode('utf-8')
-                                domains.add(domain_bytes)
-                            except Exception as e:
-                                # Если ничего не работает, пропускаем домен
-                                continue
-                    self.root.after(0, lambda: self._update_loading_status(f"Загружено {len(domains)} доменов", 100))
-                    return domains
+                self.log_message(f"Загрузка доменов из файла: {file_path}")
+                domains = await self.parse_domains_from_file(file_path)
+                if not domains:
+                    self.log_message("Файл не содержит валидных доменов для блокировки.")
+                    return
+                self.BLOCKED = domains
+                self.log_message(f"✅ Загружено из файла {len(self.BLOCKED)} доменов")
+                # Сохраняем путь к файлу в конфигурации
+                self.save_config(last_file_path=file_path)
+                # Запускаем сервер после успешной загрузки
+                self.root.after(0, self.start_server)
             except Exception as e:
-                self.root.after(0, lambda: self._update_loading_status(f"Ошибка: {str(e)}", 0))
-                self.log_message(f"Ошибка загрузки с URL: {e}")
-                return set()
+                self.log_message(f"Ошибка загрузки из файла: {str(e)}")
+            finally:
+                self.root.after(0, lambda: self.load_file_btn.config(state=tk.NORMAL))
+        
+        threading.Thread(target=lambda: asyncio.run(async_load_file()), daemon=True).start()
+
+    async def parse_domains_from_file(self, file_path: str) -> Set[bytes]:
+        """Асинхронно парсит список заблокированных доменов из локального файла."""
+        self.root.after(0, lambda: self._update_loading_status("Чтение файла...", 10))
+        
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                
+            self.root.after(0, lambda: self._update_loading_status("Обработка данных...", 30))
+            
+            domains = set()
+            lines = content.splitlines()
+            total_lines = len(lines)
+            
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                if not stripped or stripped.startswith('#'):
+                    continue
+                
+                try:
+                    # Пытаемся закодировать домен в IDNA
+                    domain_bytes = stripped.encode('idna')
+                    domains.add(domain_bytes)
+                except Exception:
+                    try:
+                        # Если IDNA не работает, используем UTF-8
+                        domain_bytes = stripped.encode('utf-8')
+                        domains.add(domain_bytes)
+                    except Exception as e:
+                        self.log_message(f"Ошибка обработки домена '{stripped}': {str(e)}")
+                        continue
+                
+                # Обновляем прогресс
+                if i % 10 == 0:  # обновляем прогресс каждые 10 строк
+                    progress = min(90, 30 + int(60 * i / total_lines))
+                    self.root.after(0, lambda p=progress: self._update_loading_status("Обработка данных...", p))
+            
+            self.root.after(0, lambda: self._update_loading_status(f"Загружено {len(domains)} доменов", 100))
+            return domains
+        except Exception as e:
+            self.root.after(0, lambda: self._update_loading_status(f"Ошибка: {str(e)}", 0))
+            self.log_message(f"Ошибка чтения файла: {e}")
+            return set()
 
     def _update_loading_status(self, status: str, progress: float) -> None:
         """Обновляет статус и прогресс загрузки доменов."""
         self.loading_status.set(status)
         self.loading_progress.set(progress)
-
     def load_blocked_domains_and_start(self) -> None:
         """Загружает заблокированные домены и запускает сервер."""
         url = self.last_url.get().strip()
@@ -587,14 +587,11 @@ class ProxyApp:
                 self.log_message(f"Ошибка загрузки: {str(e)}")
             finally:
                 self.root.after(0, lambda: self.load_btn.config(state=tk.NORMAL))
-
         threading.Thread(target=lambda: asyncio.run(async_load()), daemon=True).start()
-
     def start_proxy(self) -> None:
         """Запускает процесс загрузки доменов и последующего старта прокси."""
         # Сначала загружаем домены
         self.load_blocked_domains_and_start()
-
     def get_asyncio_loop(self) -> asyncio.AbstractEventLoop:
         """Возвращает текущий цикл событий или создаёт новый."""
         try:
@@ -606,7 +603,6 @@ class ProxyApp:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             return loop
-
     async def pipe(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, is_upload: bool) -> None:
         """Передаёт данные между двумя соединениями и подсчитывает объём передаваемых данных."""
         try:
@@ -643,7 +639,6 @@ class ProxyApp:
                     await writer.wait_closed()
                 except:
                     pass
-
     async def fragment_data(self, local_reader: asyncio.StreamReader, remote_writer: asyncio.StreamWriter) -> None:
         """Осуществляет фрагментирование HTTP-запросов согласно логике nodpi.py."""
         try:
@@ -684,7 +679,6 @@ class ProxyApp:
             await remote_writer.drain()
         except Exception as e:
             self.log_message(f"[FRAGMENT] Ошибка: {e}")
-
     async def handle_connection(self, local_reader: asyncio.StreamReader, local_writer: asyncio.StreamWriter) -> None:
         """Обрабатывает входящие соединения без ограничения на количество подключений."""
         addr = local_writer.get_extra_info('peername')
@@ -762,7 +756,6 @@ class ProxyApp:
                 await local_writer.wait_closed()
             except:
                 pass
-
     async def run_server(self) -> None:
         """Запускает прокси-сервер с обработкой ошибок."""
         server = None
@@ -793,7 +786,6 @@ class ProxyApp:
                 except:
                     pass
             self.server = None
-
     def start_server(self) -> None:
         """Запускает сервер с проверкой состояния."""
         if self.running:
@@ -814,7 +806,6 @@ class ProxyApp:
         self.last_saved_hour = datetime.datetime.now().replace(minute=0, second=0, microsecond=0)
         # Запускаем сервер в отдельном потоке
         threading.Thread(target=self.run_asyncio, daemon=True).start()
-
     def run_asyncio(self) -> None:
         """Запускает асинхронный цикл событий для сервера."""
         self.loop = asyncio.new_event_loop()
@@ -829,7 +820,6 @@ class ProxyApp:
                 self.loop.close()
             self.loop = None
             self.root.after(0, self._update_ui_after_stop)
-
     def _update_ui_after_stop(self) -> None:
         """Обновляет интерфейс после остановки сервера."""
         self.running = False
@@ -838,7 +828,6 @@ class ProxyApp:
         self.stop_btn.config(state=tk.DISABLED)
         self.server_task = None
         self.log_message("Сервер остановлен.")
-
     async def wait_for_tasks_completion(self) -> None:
         """Ожидает завершения всех активных задач с таймаутом."""
         if not self.tasks:
@@ -856,7 +845,6 @@ class ProxyApp:
             except asyncio.CancelledError:
                 pass
         self.tasks.clear()
-
     def stop_server(self) -> None:
         """Останавливает сервер и все активные соединения."""
         if not self.running:
@@ -881,13 +869,11 @@ class ProxyApp:
         else:
             self.tasks.clear()
         self.log_message("Сервер останавливается...")
-
     def update_indicator(self, status: bool) -> None:
         """Изменяет индикатор состояния сервера."""
         color = "green" if status else "gray"
         self.indicator_canvas.itemconfig(self.indicator, fill=color)
         self.status_label.config(text="Статус: " + ("Включён" if status else "Выключен"))
-
     def create_tray_icon(self) -> None:
         """Создаёт иконку в области уведомлений (трее)."""
         if self.tray_icon is not None:
@@ -909,7 +895,6 @@ class ProxyApp:
             menu
         )
         threading.Thread(target=self.tray_icon.run, daemon=True).start()
-
     def minimize_window(self) -> None:
         """Минимизирует окно программы в область уведомлений."""
         if self.minimize_to_tray.get():
@@ -917,7 +902,6 @@ class ProxyApp:
             self.create_tray_icon()
         else:
             self.on_close()
-
     def restore_window(self) -> None:
         """Восстанавливает основное окно приложения."""
         if self.tray_icon is not None:
@@ -926,7 +910,6 @@ class ProxyApp:
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
-
     def quit_application(self) -> None:
         """Завершает работу приложения."""
         try:
@@ -941,7 +924,6 @@ class ProxyApp:
             logger.error(f"Ошибка при завершении приложения: {e}")
         finally:
             os._exit(0)
-
     def on_close(self) -> None:
         """Обработчик события закрытия окна приложения."""
         if self.running:
@@ -949,7 +931,6 @@ class ProxyApp:
                 self.quit_application()
         else:
             self.quit_application()
-
     @staticmethod
     def main() -> None:
         """Точка входа приложения."""
@@ -957,6 +938,5 @@ class ProxyApp:
         root.tk.call('tk', 'scaling', 1.5)  # Увеличиваем масштаб интерфейса
         app = ProxyApp(root)
         root.mainloop()
-
 if __name__ == "__main__":
     ProxyApp.main()
